@@ -1,5 +1,8 @@
 # Amazon QLDB Rust Driver
 
+[![License](https://img.shields.io/hexpm/l/plug.svg)](https://github.com/awslabs/amazon-qldb-driver-rust/blob/main/LICENSE)
+[![CI Build](https://github.com/awslabs/amazon-qldb-driver-rust/workflows/CI%20Build/badge.svg)](https://github.com/awslabs/amazon-qldb-driver-rust/actions?query=workflow%3A%22CI+Build%22)
+
 This is the Rust driver for Amazon Quantum Ledger Database (QLDB), which allows Rust developers
 to write software that makes use of Amazon QLDB.
 
