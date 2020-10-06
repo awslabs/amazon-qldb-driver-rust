@@ -3,7 +3,7 @@
 This is the Rust driver for Amazon Quantum Ledger Database (QLDB), which allows Rust developers
 to write software that makes use of Amazon QLDB.
 
-**This is a preview of the Amazon QLDB Driver for Rust, and we do not recommend that it be used for production purposes.**
+**This package is considered experimental, under active/early development.**
 
 ## Requirements
 
