@@ -7,6 +7,7 @@ use thiserror::Error;
 extern crate log;
 
 pub mod api;
+pub mod ion_compat;
 pub mod qldb_hash;
 
 #[derive(Error, Debug)]
