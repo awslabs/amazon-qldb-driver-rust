@@ -11,15 +11,32 @@ env:
 
 jobs:
   build:
-
+    name: Build and Test
     runs-on: ${{ matrix.os }}
     strategy: 
       matrix : 
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - name: Env Variable Setup 
+        if: matrix.os == 'windows-latest'
+        run: | 
+          echo '::set-env name=LIBCLANG_PATH::C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Tools\Llvm\x64\bin'
+      - name: Git Checkout
+        uses: actions/checkout@v2          
+      - name: Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - name: Cargo Build 
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --verbose
+      - name: Cargo Test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --verbose
