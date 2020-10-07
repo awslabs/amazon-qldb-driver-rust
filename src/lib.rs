@@ -9,6 +9,7 @@ extern crate log;
 pub mod api;
 pub mod ion_compat;
 pub mod qldb_hash;
+pub mod retry;
 
 #[derive(Error, Debug)]
 pub enum QldbError {
