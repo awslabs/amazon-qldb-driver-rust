@@ -7,10 +7,15 @@ use thiserror::Error;
 extern crate log;
 
 pub mod api;
+pub mod driver;
 pub mod ion_compat;
 pub mod pool;
 pub mod qldb_hash;
 pub mod retry;
+pub mod rusoto_ext;
+pub mod transaction;
+
+pub use crate::driver::{BlockingQldbDriver, QldbDriver, QldbDriverBuilder};
 
 #[derive(Error, Debug)]
 pub enum QldbError {

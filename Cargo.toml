@@ -1,5 +1,5 @@
 [package]
-name = "amazon-qldb-driver-rust"
+name = "amazon-qldb-driver"
 version = "0.1.0"
 authors = ["Amazon QLDB Team https://aws.amazon.com/qldb"]
 edition = "2018"
@@ -7,16 +7,18 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-trait = "0.1.41"
+thiserror = "1.0.21"
+tokio = "0.2.22"
 bytes = "0.5.6"
-ion-c-sys = "0.4.3"
-log = "0.4.11"
+async-trait = "0.1.41"
 rusoto_core = "0.45.0"
 rusoto_qldb_session = "0.45.0"
 sha2 = "0.9.1"
-thiserror = "1.0.21"
-tokio = "0.2.22"
+log = "0.4.11"
+ion-c-sys = "0.4.3"
 rand = "0.7.3"
 
 [dev-dependencies]
 hex-literal = "0.3.1"
+env_logger = "0.7.1"
+ansi_term = "0.12.1"
