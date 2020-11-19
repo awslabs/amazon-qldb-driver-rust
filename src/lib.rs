@@ -8,6 +8,7 @@ extern crate log;
 
 pub mod api;
 pub mod ion_compat;
+pub mod pool;
 pub mod qldb_hash;
 pub mod retry;
 
