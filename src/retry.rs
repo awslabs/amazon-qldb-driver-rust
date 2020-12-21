@@ -64,11 +64,6 @@ impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
     async fn on_err(&self, error: &QldbError, attempt_number: u32) -> bool {
         match error {
             QldbError::Rusoto(e) => {
-                // FIXME: Currently, the only exception we retry on is
-                // `OccConflict` and `InvalidSession`. This code should be
-                // updated to match the behavior in other drivers. For example,
-                // we should retry on 500s and 503s as well as communication
-                // failures such as 'no response' or timeout.
                 let should_retry = match &e {
                     RusotoError::Service(service) => match &service {
                         SendCommandError::BadRequest(_) => false,
@@ -77,11 +72,14 @@ impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
                         SendCommandError::OccConflict(_) => true,
                         SendCommandError::RateExceeded(_) => false,
                     },
-                    RusotoError::HttpDispatch(_) => false,
+                    RusotoError::HttpDispatch(_) => true,
                     RusotoError::Credentials(_) => false,
                     RusotoError::Validation(_) => false,
                     RusotoError::ParseError(_) => false,
-                    RusotoError::Unknown(_) => false,
+                    RusotoError::Unknown(r) => match r.status.as_u16() {
+                        500 | 503 => true,
+                        _ => false,
+                    },
                     RusotoError::Blocking => false,
                 };
 
