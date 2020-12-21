@@ -43,7 +43,7 @@ pub struct QldbDriverBuilder {
     credentials_provider: BoxedCredentialsProvider,
     region: Option<Region>,
     transaction_retry_policy: Box<dyn TransactionRetryPolicy>,
-    max_sessions: usize,
+    max_concurrent_transactions: usize,
 }
 
 impl Default for QldbDriverBuilder {
@@ -55,7 +55,7 @@ impl Default for QldbDriverBuilder {
             ),
             region: None,
             transaction_retry_policy: Box::new(default_retry_policy()),
-            max_sessions: 1500,
+            max_concurrent_transactions: 1500,
         }
     }
 }
@@ -95,7 +95,7 @@ impl QldbDriverBuilder {
     }
 
     pub fn max_sessions(mut self, max_sessions: usize) -> Self {
-        self.max_sessions = max_sessions;
+        self.max_concurrent_transactions = max_sessions;
         self
     }
 
@@ -111,7 +111,7 @@ impl QldbDriverBuilder {
             session_pool: SessionPool::new(
                 qldb_client.clone(),
                 ledger_name.clone(),
-                self.max_sessions,
+                self.max_concurrent_transactions,
             ),
             transaction_retry_policy: self.transaction_retry_policy,
         })
@@ -181,7 +181,7 @@ impl QldbDriver {
     /// # use tokio;
     /// # use amazon_qldb_driver::QldbDriver;
     /// # use rusoto_core::region::Region;
-    /// # 
+    /// #
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// #   let driver = QldbDriver::builder().ledger_name("sample-ledger").build()?;
@@ -190,7 +190,7 @@ impl QldbDriver {
     ///        string.push('1');
     ///        tx.ok(()).await
     ///     }).await?;
-    /// # 
+    /// #
     /// #   Ok(())
     /// # }
     /// ```
