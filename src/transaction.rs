@@ -1,21 +1,42 @@
 use crate::api::{QldbSessionApi, SessionToken, TransactionId};
+use crate::execution_stats::{IOUsageExt, TimingInformationExt};
 use crate::ion_compat::ion_hash;
 use crate::qldb_hash::QldbHash;
 use crate::QldbError;
 use bytes::Bytes;
 use ion_c_sys::reader::IonCReaderHandle;
 use ion_c_sys::result::IonCError;
+use rusoto_qldb_session::{IOUsage, TimingInformation};
 use std::convert::TryFrom;
 use std::error::Error as StdError;
 use tokio::sync::mpsc::Sender;
 
+/// The results of executing a statement.
+///
+/// A statement may return may pages of results. This type represents pulling
+/// all of those pages into memory. As such, this type represents reading all
+/// results (it will never be constructed with partial results).
+///
+/// [`cumulative_timing_information`] and [`cumulative_io_usage`] represent the
+/// sum of server reported timing and IO usage across all pages that were
+/// fetched.
 pub struct StatementResults {
     values: Vec<Bytes>,
+    cumulative_timing_information: Option<TimingInformation>,
+    cumulative_io_usage: Option<IOUsage>,
 }
 
 impl StatementResults {
-    fn new(values: Vec<Bytes>) -> StatementResults {
-        StatementResults { values }
+    fn new(
+        values: Vec<Bytes>,
+        cumulative_timing_information: Option<TimingInformation>,
+        cumulative_io_usage: Option<IOUsage>,
+    ) -> StatementResults {
+        StatementResults {
+            values,
+            cumulative_timing_information,
+            cumulative_io_usage,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -26,6 +47,14 @@ impl StatementResults {
         self.values
             .iter()
             .map(|bytes| IonCReaderHandle::try_from(&bytes[..]))
+    }
+
+    pub fn cumulative_timing_information(&self) -> &Option<TimingInformation> {
+        &self.cumulative_timing_information
+    }
+
+    pub fn cumulative_io_usage(&self) -> &Option<IOUsage> {
+        &self.cumulative_io_usage
     }
 }
 
@@ -76,7 +105,7 @@ impl Transaction {
     {
         let statement = statement.into();
 
-        let first_page = self
+        let execute_result = self
             .client
             .execute_statement(&self.session_token, &self.tx_id, statement.clone())
             .await?;
@@ -85,7 +114,9 @@ impl Transaction {
         self.commit_digest = self.commit_digest.dot(&statement_hash);
 
         let mut values = vec![];
-        let mut current = first_page;
+        let mut current = execute_result.first_page;
+        let mut cumulative_timing = execute_result.timing_information.clone();
+        let mut cumulative_usage = execute_result.consumed_i_os.clone();
         loop {
             let page = match &current {
                 Some(_) => current.take().unwrap(),
@@ -105,19 +136,26 @@ impl Transaction {
                 }
 
                 if let Some(next_page_token) = page.next_page_token {
-                    let page = self
+                    let fetch_page_result = self
                         .client
                         .fetch_page(&self.session_token, &self.tx_id, next_page_token)
                         .await?;
 
-                    if let Some(p) = page {
+                    cumulative_timing.accumulate(&fetch_page_result.timing_information);
+                    cumulative_usage.accumulate(&fetch_page_result.consumed_i_os);
+
+                    if let Some(p) = fetch_page_result.page {
                         current.replace(p);
                     }
                 }
             }
         }
 
-        Ok(StatementResults::new(values))
+        Ok(StatementResults::new(
+            values,
+            cumulative_timing,
+            cumulative_usage,
+        ))
     }
 
     pub async fn ok<R>(self, user_data: R) -> Result<TransactionAttempt<R>, Box<dyn StdError>> {

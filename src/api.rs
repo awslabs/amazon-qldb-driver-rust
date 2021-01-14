@@ -46,14 +46,14 @@ pub trait QldbSessionApi {
         session_token: &SessionToken,
         transaction_id: &TransactionId,
         statement: String,
-    ) -> Result<Option<Page>, QldbError>;
+    ) -> Result<ExecuteStatementResult, QldbError>;
 
     async fn fetch_page(
         &self,
         session_token: &SessionToken,
         transaction_id: &TransactionId,
         next_page_token: String,
-    ) -> Result<Option<Page>, QldbError>;
+    ) -> Result<FetchPageResult, QldbError>;
 
     async fn start_session(&self, ledger_name: String) -> Result<SessionToken, QldbError>;
 
@@ -163,7 +163,7 @@ impl QldbSessionApi for QldbSessionClient {
         session_token: &SessionToken,
         transaction_id: &TransactionId,
         statement: String,
-    ) -> Result<Option<Page>, QldbError> {
+    ) -> Result<ExecuteStatementResult, QldbError> {
         let request = SendCommandRequest {
             session_token: Some(session_token.clone()),
             execute_statement: Some(ExecuteStatementRequest {
@@ -181,7 +181,7 @@ impl QldbSessionApi for QldbSessionClient {
             ),
         )?;
 
-        Ok(response.first_page)
+        Ok(response)
     }
 
     // FIXME: dont eat the page
@@ -190,7 +190,7 @@ impl QldbSessionApi for QldbSessionClient {
         session_token: &SessionToken,
         transaction_id: &TransactionId,
         next_page_token: String,
-    ) -> Result<Option<Page>, QldbError> {
+    ) -> Result<FetchPageResult, QldbError> {
         let request = SendCommandRequest {
             session_token: Some(session_token.clone()),
             fetch_page: Some(FetchPageRequest {
@@ -209,7 +209,7 @@ impl QldbSessionApi for QldbSessionClient {
                     "FetchPage requests should return FetchPage responses".into(),
                 ))?;
 
-        Ok(response.page)
+        Ok(response)
     }
 
     async fn start_session(&self, ledger_name: String) -> Result<SessionToken, QldbError> {
