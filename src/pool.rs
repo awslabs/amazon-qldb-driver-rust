@@ -1,11 +1,12 @@
 use crate::api::{QldbSessionApi, SessionToken};
 use crate::QldbError;
+use futures::future::FutureExt;
 use rusoto_qldb_session::*;
 use std::{
     cell::RefCell,
     sync::atomic::{AtomicUsize, Ordering},
 };
-use tokio::sync::mpsc::{channel, error::TryRecvError, Receiver, Sender};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 type Message = (SessionToken, bool);
 
@@ -53,10 +54,10 @@ impl SessionPool {
                     ),
                 }
             } else {
-                match self.ch.1.borrow_mut().try_recv() {
-                    Ok(m) => m,
-                    Err(TryRecvError::Empty) => break, // there are no more sessions in the pool
-                    Err(TryRecvError::Closed) => {
+                match self.ch.1.borrow_mut().recv().now_or_never() {
+                    Some(Some(m)) => m,
+                    None => break, // there are no more sessions in the pool
+                    Some(None) => {
                         unreachable!("bug! pool recv channel should not be closed")
                     }
                 }

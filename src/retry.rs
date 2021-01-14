@@ -5,7 +5,7 @@ use rand::Rng;
 use rusoto_core::RusotoError;
 use rusoto_qldb_session::*;
 use std::{cmp::min, time::Duration};
-use tokio::time::delay_for;
+use tokio::time::sleep;
 
 pub fn default_retry_policy() -> impl TransactionRetryPolicy {
     ExponentialBackoffJitterTransactionRetryPolicy::default()
@@ -88,7 +88,7 @@ impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
                 } else {
                     let delay =
                         exponential_backoff_with_jitter(self.base, self.cap, attempt_number);
-                    delay_for(Duration::from_millis(delay as u64)).await;
+                    sleep(Duration::from_millis(delay as u64)).await;
 
                     return true;
                 }
@@ -100,7 +100,7 @@ impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
 
 fn exponential_backoff_with_jitter(base: u32, cap: u32, attempt_number: u32) -> u32 {
     let max = min(cap, base.pow(attempt_number));
-    thread_rng().gen_range(0, max)
+    thread_rng().gen_range(0..max)
 }
 
 #[cfg(test)]
