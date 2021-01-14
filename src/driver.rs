@@ -356,8 +356,7 @@ pub struct BlockingQldbDriver {
 
 impl BlockingQldbDriver {
     fn new(async_driver: QldbDriver) -> Result<BlockingQldbDriver, Box<dyn std::error::Error>> {
-        let runtime = runtime::Builder::new()
-            .basic_scheduler()
+        let runtime = runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
         Ok(BlockingQldbDriver {
@@ -371,7 +370,7 @@ impl BlockingQldbDriver {
         Fut: Future<Output = Result<TransactionAttempt<R>, Box<dyn StdError>>>,
         F: Fn(Transaction) -> Fut,
     {
-        let mut runtime = self.runtime.borrow_mut();
+        let runtime = self.runtime.borrow();
         let fun = &transaction;
         runtime.block_on(async move { self.async_driver.transact(fun).await })
     }

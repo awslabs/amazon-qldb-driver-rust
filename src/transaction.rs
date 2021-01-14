@@ -120,7 +120,7 @@ impl Transaction {
         Ok(StatementResults::new(values))
     }
 
-    pub async fn ok<R>(mut self, user_data: R) -> Result<TransactionAttempt<R>, Box<dyn StdError>> {
+    pub async fn ok<R>(self, user_data: R) -> Result<TransactionAttempt<R>, Box<dyn StdError>> {
         self.channel.send(self.commit_digest).await?;
 
         Ok(TransactionAttempt {
