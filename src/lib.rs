@@ -8,6 +8,7 @@ extern crate log;
 
 pub mod api;
 pub mod driver;
+pub mod execution_stats;
 pub mod ion_compat;
 pub mod pool;
 pub mod qldb_hash;
