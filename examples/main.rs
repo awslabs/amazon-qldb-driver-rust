@@ -35,6 +35,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // No support for Ion yet!
     // assert_eq!(42, value);
 
+    info!(
+        "Statement executed in {}ms and used {} read IOs",
+        results
+            .cumulative_timing_information()
+            .as_ref()
+            .unwrap()
+            .processing_time_milliseconds
+            .unwrap(),
+        results
+            .cumulative_io_usage()
+            .as_ref()
+            .unwrap()
+            .read_i_os
+            .unwrap()
+    );
+
     info!("Goodbye!");
 
     Ok(())
