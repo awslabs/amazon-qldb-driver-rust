@@ -74,25 +74,33 @@ mod tests {
                 processing_time_milliseconds: Some(1),
             },
             IOUsage {
-                read_i_os: Some(1),
-                write_i_os: Some(1),
+                read_i_os: Some(2),
+                write_i_os: Some(3),
             },
         );
 
         stats.0.accumulate(&Some(TimingInformation {
-            processing_time_milliseconds: Some(2),
+            processing_time_milliseconds: Some(4),
         }));
 
         stats.1.accumulate(&Some(IOUsage {
-            read_i_os: Some(2),
-            write_i_os: Some(2),
+            read_i_os: Some(5),
+            write_i_os: Some(6),
         }));
 
         assert_eq!(
             TimingInformation {
-                processing_time_milliseconds: Some(3)
+                processing_time_milliseconds: Some(5)
             },
             stats.0
+        );
+
+        assert_eq!(
+            IOUsage {
+                read_i_os: Some(7),
+                write_i_os: Some(9)
+            },
+            stats.1
         );
     }
 }
