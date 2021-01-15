@@ -209,7 +209,24 @@ impl QldbDriver {
             let session_handle = self.session_pool.next().await?;
             let session_token = &session_handle.session_token;
 
-            let tx_id = self.client.start_transaction(&session_token).await?;
+            let tx_id = match self.client.start_transaction(&session_token).await {
+                Ok(it) => it,
+                Err(qldb_err) => {
+                    if let QldbError::Rusoto(RusotoError::Service(SendCommandError::BadRequest(
+                        message,
+                    ))) = qldb_err
+                    {
+                        debug!(
+                            "unable to start a transaction on session {} (will be discarded): {}",
+                            session_token, message
+                        );
+                        session_handle.notify_invalid();
+                    }
+
+                    // FIXME: Include some sort of sleep and attempt cap.
+                    continue;
+                }
+            };
             let (sender, mut receiver) = channel(1);
             let tx = Transaction::new(
                 Box::new(self.client.clone()),
