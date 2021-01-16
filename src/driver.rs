@@ -12,7 +12,7 @@ use rusoto_core::{
 use rusoto_qldb_session::*;
 use std::error::Error as StdError;
 use std::{cell::RefCell, future::Future};
-use tokio::{runtime, sync::mpsc::channel};
+use tokio::runtime;
 
 /// A builder to help you customize a [`QldbDriver`].
 ///
@@ -209,31 +209,28 @@ impl QldbDriver {
             let session_handle = self.session_pool.next().await?;
             let session_token = &session_handle.session_token;
 
-            let tx_id = match self.client.start_transaction(&session_token).await {
-                Ok(it) => it,
-                Err(qldb_err) => {
-                    if let QldbError::Rusoto(RusotoError::Service(SendCommandError::BadRequest(
-                        message,
-                    ))) = qldb_err
-                    {
-                        debug!(
+            let (tx, mut receiver) =
+                match Transaction::start(self.client.clone(), session_handle.session_token.clone())
+                    .await
+                {
+                    Ok(tx) => tx,
+                    Err(qldb_err) => {
+                        if let QldbError::Rusoto(RusotoError::Service(
+                            SendCommandError::BadRequest(message),
+                        )) = qldb_err
+                        {
+                            debug!(
                             "unable to start a transaction on session {} (will be discarded): {}",
                             session_token, message
                         );
-                        session_handle.notify_invalid();
-                    }
+                            session_handle.notify_invalid();
+                        }
 
-                    // FIXME: Include some sort of sleep and attempt cap.
-                    continue;
-                }
-            };
-            let (sender, mut receiver) = channel(1);
-            let tx = Transaction::new(
-                Box::new(self.client.clone()),
-                session_token.clone(),
-                tx_id.clone(),
-                sender,
-            );
+                        // FIXME: Include some sort of sleep and attempt cap.
+                        continue;
+                    }
+                };
+            let tx_id = tx.id.clone();
 
             // Run the user's transaction. They can run methods on [`Transaction`] such as [`execute_statement`]. When this future completes, one of 4 things could have happened:
             //
