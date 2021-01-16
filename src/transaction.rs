@@ -9,9 +9,10 @@ use crate::{
 use bytes::Bytes;
 use ion_c_sys::reader::IonCReaderHandle;
 use ion_c_sys::result::IonCError;
+use rusoto_qldb_session::QldbSessionClient;
 use std::convert::TryFrom;
 use std::error::Error as StdError;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 
 /// The results of executing a statement.
 ///
@@ -64,27 +65,28 @@ pub struct TransactionAttempt<R> {
 pub struct Transaction {
     client: Box<dyn QldbSessionApi>,
     session_token: SessionToken,
-    pub tx_id: TransactionId,
+    pub id: TransactionId,
     commit_digest: QldbHash,
     channel: Sender<QldbHash>,
 }
 
 impl Transaction {
-    pub(crate) fn new(
-        client: Box<dyn QldbSessionApi>,
+    pub(crate) async fn start(
+        client: QldbSessionClient,
         session_token: SessionToken,
-        tx_id: TransactionId,
-        channel: Sender<QldbHash>,
-    ) -> Transaction {
-        let seed_hash = ion_hash(&tx_id);
+    ) -> Result<(Transaction, Receiver<QldbHash>), QldbError> {
+        let id = client.start_transaction(&session_token).await?;
+        let (sender, receiver) = mpsc::channel(1);
+        let seed_hash = ion_hash(&id);
         let commit_digest = QldbHash::from_bytes(seed_hash).unwrap();
-        Transaction {
-            client,
+        let transaction = Transaction {
+            client: Box::new(client),
             session_token,
-            tx_id,
+            id,
             commit_digest,
-            channel,
-        }
+            channel: sender,
+        };
+        Ok((transaction, receiver))
     }
 
     // FIXME: params, result, IonHash
@@ -99,7 +101,7 @@ impl Transaction {
 
         let execute_result = self
             .client
-            .execute_statement(&self.session_token, &self.tx_id, statement.clone())
+            .execute_statement(&self.session_token, &self.id, statement.clone())
             .await?;
 
         let statement_hash = QldbHash::from_bytes(ion_hash(&statement)).unwrap();
@@ -130,7 +132,7 @@ impl Transaction {
                 if let Some(next_page_token) = page.next_page_token {
                     let fetch_page_result = self
                         .client
-                        .fetch_page(&self.session_token, &self.tx_id, next_page_token)
+                        .fetch_page(&self.session_token, &self.id, next_page_token)
                         .await?;
 
                     cumulative_timing.accumulate(&fetch_page_result.timing_information);
@@ -151,7 +153,7 @@ impl Transaction {
         self.channel.send(self.commit_digest).await?;
 
         Ok(TransactionAttempt {
-            tx_id: self.tx_id,
+            tx_id: self.id,
             disposition: TransactionDisposition::Commit,
             user_data: user_data,
         })
@@ -159,7 +161,7 @@ impl Transaction {
 
     pub async fn abort<R>(self, user_data: R) -> Result<TransactionAttempt<R>, Box<dyn StdError>> {
         Ok(TransactionAttempt {
-            tx_id: self.tx_id,
+            tx_id: self.id,
             disposition: TransactionDisposition::Abort,
             user_data: user_data,
         })
