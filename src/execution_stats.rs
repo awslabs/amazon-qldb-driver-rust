@@ -1,4 +1,5 @@
 use rusoto_qldb_session::IOUsage as RusotoIOUsage;
+use rusoto_qldb_session::StartTransactionResult;
 use rusoto_qldb_session::TimingInformation as RusotoTimingInformation;
 
 // public (stable) types for execution stats.
@@ -14,15 +15,51 @@ pub struct ExecutionStats {
     pub io_usage: IOUsage,
 }
 
+impl ExecutionStats {
+    pub fn accumulate<R>(&mut self, other: &R)
+    where
+        R: RusotoQldbResult,
+    {
+        self.timing_information.accumulate(other);
+        self.io_usage.accumulate(other);
+    }
+}
+
 #[derive(Default, Debug, Clone, Eq, PartialEq)]
 pub struct TimingInformation {
     pub processing_time_milliseconds: i64,
+}
+
+impl TimingInformation {
+    pub fn accumulate<R>(&mut self, other: &R)
+    where
+        R: RusotoQldbResult,
+    {
+        self.processing_time_milliseconds +=
+            other.timing_information().processing_time_milliseconds;
+    }
 }
 
 #[derive(Default, Debug, Clone, Eq, PartialEq)]
 pub struct IOUsage {
     pub read_ios: i64,
     pub write_ios: i64,
+}
+
+impl IOUsage {
+    pub fn accumulate<R>(&mut self, other: &R)
+    where
+        R: RusotoQldbResult,
+    {
+        if let Some(IOUsage {
+            read_ios,
+            write_ios,
+        }) = other.io_usage()
+        {
+            self.read_ios += read_ios;
+            self.write_ios += write_ios;
+        }
+    }
 }
 
 impl From<(Option<RusotoTimingInformation>, Option<RusotoIOUsage>)> for ExecutionStats {
@@ -49,6 +86,14 @@ impl From<(RusotoTimingInformation, RusotoIOUsage)> for ExecutionStats {
     }
 }
 
+impl From<Option<RusotoTimingInformation>> for TimingInformation {
+    fn from(rusoto: Option<RusotoTimingInformation>) -> Self {
+        rusoto
+            .map(|info| info.into())
+            .unwrap_or(TimingInformation::default())
+    }
+}
+
 impl From<RusotoTimingInformation> for TimingInformation {
     fn from(rusoto: RusotoTimingInformation) -> Self {
         TimingInformation {
@@ -63,6 +108,21 @@ impl From<RusotoIOUsage> for IOUsage {
             read_ios: rusoto.read_i_os.unwrap_or(0),
             write_ios: rusoto.write_i_os.unwrap_or(0),
         }
+    }
+}
+
+pub trait RusotoQldbResult {
+    fn timing_information(&self) -> TimingInformation;
+    fn io_usage(&self) -> Option<IOUsage>;
+}
+
+impl RusotoQldbResult for StartTransactionResult {
+    fn timing_information(&self) -> TimingInformation {
+        self.timing_information.clone().into()
+    }
+
+    fn io_usage(&self) -> Option<IOUsage> {
+        None
     }
 }
 
