@@ -1,6 +1,7 @@
-use rusoto_qldb_session::IOUsage as RusotoIOUsage;
+use rusoto_qldb_session::FetchPageResult;
 use rusoto_qldb_session::StartTransactionResult;
 use rusoto_qldb_session::TimingInformation as RusotoTimingInformation;
+use rusoto_qldb_session::{ExecuteStatementResult, IOUsage as RusotoIOUsage};
 
 // public (stable) types for execution stats.
 //
@@ -126,108 +127,22 @@ impl RusotoQldbResult for StartTransactionResult {
     }
 }
 
-// Maintenance of execution stats.
-//
-// The API models TimingInformation as optional, which can make it a little
-// tricky to accumulate processing time (consider fetching pages of results,
-// summing total time). The traits here serve to organize this concern out of
-// the main body of code.
+impl RusotoQldbResult for ExecuteStatementResult {
+    fn timing_information(&self) -> TimingInformation {
+        self.timing_information.clone().into()
+    }
 
-pub trait RusotoTimingInformationExt {
-    fn accumulate(&mut self, other: &Option<RusotoTimingInformation>);
-}
-
-impl<T> RusotoTimingInformationExt for Option<T>
-where
-    T: RusotoTimingInformationExt,
-{
-    fn accumulate(&mut self, other: &Option<RusotoTimingInformation>) {
-        if let Some(t) = self {
-            t.accumulate(other);
-        }
+    fn io_usage(&self) -> Option<IOUsage> {
+        self.consumed_i_os.clone().map(|usage| usage.into())
     }
 }
 
-impl RusotoTimingInformationExt for RusotoTimingInformation {
-    fn accumulate(&mut self, other: &Option<RusotoTimingInformation>) {
-        if let Some(o) = other {
-            if let (Some(i), Some(j)) = (
-                self.processing_time_milliseconds,
-                o.processing_time_milliseconds,
-            ) {
-                self.processing_time_milliseconds = Some(i + j)
-            }
-        }
+impl RusotoQldbResult for FetchPageResult {
+    fn timing_information(&self) -> TimingInformation {
+        self.timing_information.clone().into()
     }
-}
 
-pub trait RusotoIOUsageExt {
-    fn accumulate(&mut self, other: &Option<RusotoIOUsage>);
-}
-
-impl<T> RusotoIOUsageExt for Option<T>
-where
-    T: RusotoIOUsageExt,
-{
-    fn accumulate(&mut self, other: &Option<RusotoIOUsage>) {
-        if let Some(t) = self {
-            t.accumulate(other);
-        }
-    }
-}
-
-impl RusotoIOUsageExt for RusotoIOUsage {
-    fn accumulate(&mut self, other: &Option<RusotoIOUsage>) {
-        if let Some(o) = other {
-            if let (Some(i), Some(j)) = (self.read_i_os, o.read_i_os) {
-                self.read_i_os = Some(i + j)
-            }
-
-            if let (Some(i), Some(j)) = (self.write_i_os, o.write_i_os) {
-                self.write_i_os = Some(i + j)
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn accumulating_stats() {
-        let mut stats = (
-            RusotoTimingInformation {
-                processing_time_milliseconds: Some(1),
-            },
-            RusotoIOUsage {
-                read_i_os: Some(2),
-                write_i_os: Some(3),
-            },
-        );
-
-        stats.0.accumulate(&Some(RusotoTimingInformation {
-            processing_time_milliseconds: Some(4),
-        }));
-
-        stats.1.accumulate(&Some(RusotoIOUsage {
-            read_i_os: Some(5),
-            write_i_os: Some(6),
-        }));
-
-        assert_eq!(
-            RusotoTimingInformation {
-                processing_time_milliseconds: Some(5)
-            },
-            stats.0
-        );
-
-        assert_eq!(
-            RusotoIOUsage {
-                read_i_os: Some(7),
-                write_i_os: Some(9)
-            },
-            stats.1
-        );
+    fn io_usage(&self) -> Option<IOUsage> {
+        self.consumed_i_os.clone().map(|usage| usage.into())
     }
 }

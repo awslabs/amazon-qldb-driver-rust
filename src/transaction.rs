@@ -1,4 +1,3 @@
-use crate::execution_stats::{RusotoIOUsageExt, RusotoTimingInformationExt};
 use crate::ion_compat::ion_hash;
 use crate::qldb_hash::QldbHash;
 use crate::QldbError;
@@ -109,18 +108,18 @@ impl Transaction {
     {
         let statement = statement.into();
 
+        let mut execution_stats = ExecutionStats::default();
         let execute_result = self
             .client
             .execute_statement(&self.session_token, &self.id, statement.clone())
             .await?;
+        execution_stats.accumulate(&execute_result);
 
         let statement_hash = QldbHash::from_bytes(ion_hash(&statement)).unwrap();
         self.commit_digest = self.commit_digest.dot(&statement_hash);
 
         let mut values = vec![];
         let mut current = execute_result.first_page;
-        let mut cumulative_timing = execute_result.timing_information.clone();
-        let mut cumulative_usage = execute_result.consumed_i_os.clone();
         loop {
             let page = match &current {
                 Some(_) => current.take().unwrap(),
@@ -145,8 +144,7 @@ impl Transaction {
                         .fetch_page(&self.session_token, &self.id, next_page_token)
                         .await?;
 
-                    cumulative_timing.accumulate(&fetch_page_result.timing_information);
-                    cumulative_usage.accumulate(&fetch_page_result.consumed_i_os);
+                    execution_stats.accumulate(&fetch_page_result);
 
                     if let Some(p) = fetch_page_result.page {
                         current.replace(p);
@@ -155,7 +153,6 @@ impl Transaction {
             }
         }
 
-        let execution_stats = (cumulative_timing, cumulative_usage).into();
         Ok(StatementResults::new(values, execution_stats))
     }
 
