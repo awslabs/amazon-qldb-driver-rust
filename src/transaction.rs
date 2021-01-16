@@ -58,6 +58,7 @@ pub enum TransactionDisposition {
 pub struct TransactionAttempt<R> {
     pub(crate) tx_id: TransactionId,
     pub(crate) disposition: TransactionDisposition,
+    pub(crate) execution_stats: ExecutionStats,
     pub(crate) user_data: R,
 }
 
@@ -153,6 +154,7 @@ impl Transaction {
             }
         }
 
+        self.execution_stats.accumulate(&execution_stats);
         Ok(StatementResults::new(values, execution_stats))
     }
 
@@ -162,6 +164,7 @@ impl Transaction {
         Ok(TransactionAttempt {
             tx_id: self.id,
             disposition: TransactionDisposition::Commit,
+            execution_stats: self.execution_stats,
             user_data: user_data,
         })
     }
@@ -170,6 +173,7 @@ impl Transaction {
         Ok(TransactionAttempt {
             tx_id: self.id,
             disposition: TransactionDisposition::Abort,
+            execution_stats: self.execution_stats,
             user_data: user_data,
         })
     }

@@ -241,6 +241,8 @@ impl QldbDriver {
             //    b. Otherwise, we return the error to the user.
             let result = match transaction(tx).await {
                 Ok(a) => {
+                    let mut execution_stats = a.execution_stats.clone();
+
                     // This should never happen, but because we move the Transaction into the closure, we need to assert the user returns a `TransactionAttempt` for that same transaction!
                     if a.tx_id != tx_id {
                         return Err(QldbError::UsageError(format!("the call to transact passed your code a Transaction with id {} but you returned instructions for Transaction with id {}", tx_id, a.tx_id)))?;
@@ -260,16 +262,21 @@ impl QldbDriver {
                             // might fail ("transaction already open"). This is not a safety issue, but it will cause user-level failures as BadRequests are typically not retried.
                             //
                             // So, we take the pragmatic approach and mark the session as invalid. This prevents it being returned to the pool.
-                            if let Err(e) = self.client.abort_transaction(session_token).await {
-                                debug!("ignoring failure to abort tx {}: {}", a.tx_id, e);
-                                session_handle.notify_invalid();
-                            }
+                            match self.client.abort_transaction(session_token).await {
+                                Ok(r) => {
+                                    execution_stats.accumulate(&r);
+                                }
+                                Err(e) => {
+                                    debug!("ignoring failure to abort tx {}: {}", a.tx_id, e);
+                                    session_handle.notify_invalid();
+                                }
+                            };
 
                             // If a user calls abort, they will get `Ok(user_data)` returned. This does not allow a disambiguation between data that was committed (verified by OCC) versus
                             // data that was captured in an aborted transaction. Consider an alternative API where the Result Ok variant is an Enum with either `Committed(data)` or
                             // `Uncommitted(data)`. More clear, but also much more annoying to work with. Because this API is generic over `R`, we leave the commit/abort wrapping up to
                             // users.
-                            return Ok(a.user_data);
+                            return Ok(a.user_data); // TODO: return stats
                         }
                         TransactionDisposition::Commit => {
                             debug!("transaction {} will be committed", a.tx_id);
