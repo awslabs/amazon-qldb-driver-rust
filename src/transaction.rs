@@ -1,12 +1,14 @@
-use crate::api::{QldbSessionApi, SessionToken, TransactionId};
-use crate::execution_stats::{IOUsageExt, TimingInformationExt};
+use crate::execution_stats::{RusotoIOUsageExt, RusotoTimingInformationExt};
 use crate::ion_compat::ion_hash;
 use crate::qldb_hash::QldbHash;
 use crate::QldbError;
+use crate::{
+    api::{QldbSessionApi, SessionToken, TransactionId},
+    execution_stats::ExecutionStats,
+};
 use bytes::Bytes;
 use ion_c_sys::reader::IonCReaderHandle;
 use ion_c_sys::result::IonCError;
-use rusoto_qldb_session::{IOUsage, TimingInformation};
 use std::convert::TryFrom;
 use std::error::Error as StdError;
 use tokio::sync::mpsc::Sender;
@@ -22,20 +24,14 @@ use tokio::sync::mpsc::Sender;
 /// fetched.
 pub struct StatementResults {
     values: Vec<Bytes>,
-    cumulative_timing_information: Option<TimingInformation>,
-    cumulative_io_usage: Option<IOUsage>,
+    execution_stats: ExecutionStats,
 }
 
 impl StatementResults {
-    fn new(
-        values: Vec<Bytes>,
-        cumulative_timing_information: Option<TimingInformation>,
-        cumulative_io_usage: Option<IOUsage>,
-    ) -> StatementResults {
+    fn new(values: Vec<Bytes>, execution_stats: ExecutionStats) -> StatementResults {
         StatementResults {
             values,
-            cumulative_timing_information,
-            cumulative_io_usage,
+            execution_stats,
         }
     }
 
@@ -49,12 +45,8 @@ impl StatementResults {
             .map(|bytes| IonCReaderHandle::try_from(&bytes[..]))
     }
 
-    pub fn cumulative_timing_information(&self) -> &Option<TimingInformation> {
-        &self.cumulative_timing_information
-    }
-
-    pub fn cumulative_io_usage(&self) -> &Option<IOUsage> {
-        &self.cumulative_io_usage
+    pub fn execution_stats(&self) -> &ExecutionStats {
+        &self.execution_stats
     }
 }
 
@@ -151,11 +143,8 @@ impl Transaction {
             }
         }
 
-        Ok(StatementResults::new(
-            values,
-            cumulative_timing,
-            cumulative_usage,
-        ))
+        let execution_stats = (cumulative_timing, cumulative_usage).into();
+        Ok(StatementResults::new(values, execution_stats))
     }
 
     pub async fn ok<R>(self, user_data: R) -> Result<TransactionAttempt<R>, Box<dyn StdError>> {

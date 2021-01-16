@@ -38,17 +38,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(
         "Statement executed in {}ms and used {} read IOs",
         results
-            .cumulative_timing_information()
-            .as_ref()
-            .unwrap()
-            .processing_time_milliseconds
-            .unwrap(),
-        results
-            .cumulative_io_usage()
-            .as_ref()
-            .unwrap()
-            .read_i_os
-            .unwrap()
+            .execution_stats()
+            .timing_information
+            .processing_time_milliseconds,
+        results.execution_stats().io_usage.read_ios
     );
 
     info!("Goodbye!");
