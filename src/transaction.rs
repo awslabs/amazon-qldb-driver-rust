@@ -68,6 +68,7 @@ pub struct Transaction {
     pub id: TransactionId,
     commit_digest: QldbHash,
     channel: Sender<QldbHash>,
+    execution_stats: ExecutionStats,
 }
 
 impl Transaction {
@@ -75,7 +76,15 @@ impl Transaction {
         client: QldbSessionClient,
         session_token: SessionToken,
     ) -> Result<(Transaction, Receiver<QldbHash>), QldbError> {
-        let id = client.start_transaction(&session_token).await?;
+        let mut execution_stats = ExecutionStats::default();
+        let start_result = client.start_transaction(&session_token).await?;
+        execution_stats.accumulate(&start_result);
+        let id = start_result
+            .transaction_id
+            .ok_or(QldbError::UnexpectedResponse(
+                "StartTransaction should always return a transaction_id".into(),
+            ))?;
+
         let (sender, receiver) = mpsc::channel(1);
         let seed_hash = ion_hash(&id);
         let commit_digest = QldbHash::from_bytes(seed_hash).unwrap();
@@ -85,6 +94,7 @@ impl Transaction {
             id,
             commit_digest,
             channel: sender,
+            execution_stats,
         };
         Ok((transaction, receiver))
     }

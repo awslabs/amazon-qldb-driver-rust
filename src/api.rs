@@ -60,7 +60,7 @@ pub trait QldbSessionApi {
     async fn start_transaction(
         &self,
         session_token: &SessionToken,
-    ) -> Result<TransactionId, QldbError>;
+    ) -> Result<StartTransactionResult, QldbError>;
 }
 
 #[async_trait]
@@ -237,7 +237,7 @@ impl QldbSessionApi for QldbSessionClient {
     async fn start_transaction(
         &self,
         session_token: &SessionToken,
-    ) -> Result<TransactionId, QldbError> {
+    ) -> Result<StartTransactionResult, QldbError> {
         let request = SendCommandRequest {
             session_token: Some(session_token.clone()),
             start_transaction: Some(StartTransactionRequest {}),
@@ -247,14 +247,10 @@ impl QldbSessionApi for QldbSessionClient {
         debug!("request: start_transaction {:?}", request);
         let response = self.send_command(request).await?;
 
-        response
+        Ok(response
             .start_transaction
             .ok_or(QldbError::UnexpectedResponse(
                 "StartTransaction requests should return StartTransaction responses".into(),
-            ))?
-            .transaction_id
-            .ok_or(QldbError::UnexpectedResponse(
-                "StartTransaction should always return a transaction_id".into(),
-            ))
+            ))?)
     }
 }
