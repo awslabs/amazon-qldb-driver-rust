@@ -1,6 +1,6 @@
-use rusoto_qldb_session::FetchPageResult;
 use rusoto_qldb_session::StartTransactionResult;
 use rusoto_qldb_session::TimingInformation as RusotoTimingInformation;
+use rusoto_qldb_session::{AbortTransactionResult, CommitTransactionResult, FetchPageResult};
 use rusoto_qldb_session::{ExecuteStatementResult, IOUsage as RusotoIOUsage};
 
 // public (stable) types for execution stats.
@@ -19,7 +19,7 @@ pub struct ExecutionStats {
 impl ExecutionStats {
     pub fn accumulate<R>(&mut self, other: &R)
     where
-        R: RusotoQldbResult,
+        R: HasExecutionStats,
     {
         self.timing_information.accumulate(other);
         self.io_usage.accumulate(other);
@@ -34,7 +34,7 @@ pub struct TimingInformation {
 impl TimingInformation {
     pub fn accumulate<R>(&mut self, other: &R)
     where
-        R: RusotoQldbResult,
+        R: HasExecutionStats,
     {
         self.processing_time_milliseconds +=
             other.timing_information().processing_time_milliseconds;
@@ -50,7 +50,7 @@ pub struct IOUsage {
 impl IOUsage {
     pub fn accumulate<R>(&mut self, other: &R)
     where
-        R: RusotoQldbResult,
+        R: HasExecutionStats,
     {
         if let Some(IOUsage {
             read_ios,
@@ -112,12 +112,22 @@ impl From<RusotoIOUsage> for IOUsage {
     }
 }
 
-pub trait RusotoQldbResult {
+pub trait HasExecutionStats {
     fn timing_information(&self) -> TimingInformation;
     fn io_usage(&self) -> Option<IOUsage>;
 }
 
-impl RusotoQldbResult for StartTransactionResult {
+impl HasExecutionStats for ExecutionStats {
+    fn timing_information(&self) -> TimingInformation {
+        self.timing_information.clone()
+    }
+
+    fn io_usage(&self) -> Option<IOUsage> {
+        Some(self.io_usage.clone())
+    }
+}
+
+impl HasExecutionStats for StartTransactionResult {
     fn timing_information(&self) -> TimingInformation {
         self.timing_information.clone().into()
     }
@@ -127,7 +137,17 @@ impl RusotoQldbResult for StartTransactionResult {
     }
 }
 
-impl RusotoQldbResult for ExecuteStatementResult {
+impl HasExecutionStats for AbortTransactionResult {
+    fn timing_information(&self) -> TimingInformation {
+        self.timing_information.clone().into()
+    }
+
+    fn io_usage(&self) -> Option<IOUsage> {
+        None
+    }
+}
+
+impl HasExecutionStats for ExecuteStatementResult {
     fn timing_information(&self) -> TimingInformation {
         self.timing_information.clone().into()
     }
@@ -137,7 +157,17 @@ impl RusotoQldbResult for ExecuteStatementResult {
     }
 }
 
-impl RusotoQldbResult for FetchPageResult {
+impl HasExecutionStats for FetchPageResult {
+    fn timing_information(&self) -> TimingInformation {
+        self.timing_information.clone().into()
+    }
+
+    fn io_usage(&self) -> Option<IOUsage> {
+        self.consumed_i_os.clone().map(|usage| usage.into())
+    }
+}
+
+impl HasExecutionStats for CommitTransactionResult {
     fn timing_information(&self) -> TimingInformation {
         self.timing_information.clone().into()
     }

@@ -30,14 +30,17 @@ pub type TransactionId = String;
 /// session but not start a transaction - not very useful!
 #[async_trait]
 pub trait QldbSessionApi {
-    async fn abort_transaction(&self, session_token: &SessionToken) -> Result<(), QldbError>;
+    async fn abort_transaction(
+        &self,
+        session_token: &SessionToken,
+    ) -> Result<AbortTransactionResult, QldbError>;
 
     async fn commit_transaction(
         &self,
         session_token: &SessionToken,
         transaction_id: TransactionId,
         commit_digest: bytes::Bytes,
-    ) -> Result<(), QldbError>;
+    ) -> Result<CommitTransactionResult, QldbError>;
     async fn end_session(&self, session_token: SessionToken) -> Result<(), QldbError>;
 
     // FIXME: params, result
@@ -65,7 +68,10 @@ pub trait QldbSessionApi {
 
 #[async_trait]
 impl QldbSessionApi for QldbSessionClient {
-    async fn abort_transaction(&self, session_token: &SessionToken) -> Result<(), QldbError> {
+    async fn abort_transaction(
+        &self,
+        session_token: &SessionToken,
+    ) -> Result<AbortTransactionResult, QldbError> {
         let request = SendCommandRequest {
             session_token: Some(session_token.clone()),
             abort_transaction: Some(AbortTransactionRequest {}),
@@ -75,13 +81,11 @@ impl QldbSessionApi for QldbSessionClient {
         debug!("request: abort_transaction {:?}", request);
         let response = self.send_command(request).await?;
 
-        response
+        Ok(response
             .abort_transaction
             .ok_or(QldbError::UnexpectedResponse(
                 "AbortTransaction requests should return AbortTransaction responses".into(),
-            ))?;
-
-        Ok(())
+            ))?)
     }
 
     async fn commit_transaction(
@@ -89,7 +93,7 @@ impl QldbSessionApi for QldbSessionClient {
         session_token: &SessionToken,
         transaction_id: TransactionId,
         commit_digest: Bytes,
-    ) -> Result<(), QldbError> {
+    ) -> Result<CommitTransactionResult, QldbError> {
         let request = SendCommandRequest {
             session_token: Some(session_token.clone()),
             commit_transaction: Some(CommitTransactionRequest {
@@ -111,11 +115,12 @@ impl QldbSessionApi for QldbSessionClient {
         let remote_transaction_id =
             committed
                 .transaction_id
+                .as_ref()
                 .ok_or(QldbError::UnexpectedResponse(
                     "CommitTransaction should always return a transaction_id".into(),
                 ))?;
 
-        if transaction_id != remote_transaction_id {
+        if &transaction_id != remote_transaction_id {
             return Err(QldbError::UnexpectedResponse(format!(
                 r#"The committed transaction id did not match our transaction id, this should never happen.
  The transaction we we committed was {:?}, the server responded with {:?}."#,
@@ -123,11 +128,13 @@ impl QldbSessionApi for QldbSessionClient {
             )));
         }
 
-        let remote_commit_digest = committed
-            .commit_digest
-            .ok_or(QldbError::UnexpectedResponse(
-                "CommitTransaction should always return a commit_digest".into(),
-            ))?;
+        let remote_commit_digest =
+            committed
+                .commit_digest
+                .as_ref()
+                .ok_or(QldbError::UnexpectedResponse(
+                    "CommitTransaction should always return a commit_digest".into(),
+                ))?;
 
         if commit_digest != remote_commit_digest {
             return Err(QldbError::UnexpectedResponse(format!(
@@ -137,7 +144,7 @@ impl QldbSessionApi for QldbSessionClient {
             )));
         }
 
-        Ok(())
+        Ok(committed)
     }
 
     async fn end_session(&self, session_token: SessionToken) -> Result<(), QldbError> {
