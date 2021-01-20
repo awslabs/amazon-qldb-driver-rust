@@ -62,7 +62,7 @@ pub struct TransactionOutcome<R> {
     pub(crate) user_data: R,
 }
 
-pub struct Transaction {
+pub struct TransactionAttempt {
     client: Box<dyn QldbSessionApi>,
     session_token: SessionToken,
     pub id: TransactionId,
@@ -71,11 +71,11 @@ pub struct Transaction {
     execution_stats: ExecutionStats,
 }
 
-impl Transaction {
+impl TransactionAttempt {
     pub(crate) async fn start(
         client: QldbSessionClient,
         session_token: SessionToken,
-    ) -> Result<(Transaction, Receiver<QldbHash>), QldbError> {
+    ) -> Result<(TransactionAttempt, Receiver<QldbHash>), QldbError> {
         let mut execution_stats = ExecutionStats::default();
         let start_result = client.start_transaction(&session_token).await?;
         execution_stats.accumulate(&start_result);
@@ -88,7 +88,7 @@ impl Transaction {
         let (sender, receiver) = mpsc::channel(1);
         let seed_hash = ion_hash(&id);
         let commit_digest = QldbHash::from_bytes(seed_hash).unwrap();
-        let transaction = Transaction {
+        let transaction = TransactionAttempt {
             client: Box::new(client),
             session_token,
             id,
