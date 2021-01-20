@@ -55,7 +55,7 @@ pub enum TransactionDisposition {
     Abort,
 }
 
-pub struct TransactionAttempt<R> {
+pub struct TransactionOutcome<R> {
     pub(crate) tx_id: TransactionId,
     pub(crate) disposition: TransactionDisposition,
     pub(crate) execution_stats: ExecutionStats,
@@ -158,10 +158,10 @@ impl Transaction {
         Ok(StatementResults::new(values, execution_stats))
     }
 
-    pub async fn ok<R>(self, user_data: R) -> Result<TransactionAttempt<R>, Box<dyn StdError>> {
+    pub async fn ok<R>(self, user_data: R) -> Result<TransactionOutcome<R>, Box<dyn StdError>> {
         self.channel.send(self.commit_digest).await?;
 
-        Ok(TransactionAttempt {
+        Ok(TransactionOutcome {
             tx_id: self.id,
             disposition: TransactionDisposition::Commit,
             execution_stats: self.execution_stats,
@@ -169,8 +169,8 @@ impl Transaction {
         })
     }
 
-    pub async fn abort<R>(self, user_data: R) -> Result<TransactionAttempt<R>, Box<dyn StdError>> {
-        Ok(TransactionAttempt {
+    pub async fn abort<R>(self, user_data: R) -> Result<TransactionOutcome<R>, Box<dyn StdError>> {
+        Ok(TransactionOutcome {
             tx_id: self.id,
             disposition: TransactionDisposition::Abort,
             execution_stats: self.execution_stats,
