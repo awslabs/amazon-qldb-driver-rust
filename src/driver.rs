@@ -1,6 +1,6 @@
 use crate::api::QldbSessionApi;
 use crate::rusoto_ext::*;
-use crate::transaction::{Transaction, TransactionAttempt, TransactionDisposition};
+use crate::transaction::{Transaction, TransactionDisposition, TransactionOutcome};
 use crate::{
     pool::SessionPool, retry::default_retry_policy, retry::TransactionRetryPolicy, QldbError,
 };
@@ -198,7 +198,7 @@ impl QldbDriver {
     /// Again, this is because `transaction` is `Fn` not `FnMut` and thus is not allowed to mutate `string`.
     pub async fn transact<F, Fut, R>(&self, transaction: F) -> Result<R, Box<dyn StdError>>
     where
-        Fut: Future<Output = Result<TransactionAttempt<R>, Box<dyn StdError>>>,
+        Fut: Future<Output = Result<TransactionOutcome<R>, Box<dyn StdError>>>,
         F: Fn(Transaction) -> Fut,
     {
         let mut attempt_number = 0u32;
@@ -388,7 +388,7 @@ impl BlockingQldbDriver {
 
     pub fn transact<F, Fut, R>(&self, transaction: F) -> Result<R, Box<dyn StdError>>
     where
-        Fut: Future<Output = Result<TransactionAttempt<R>, Box<dyn StdError>>>,
+        Fut: Future<Output = Result<TransactionOutcome<R>, Box<dyn StdError>>>,
         F: Fn(Transaction) -> Fut,
     {
         let runtime = self.runtime.borrow();
