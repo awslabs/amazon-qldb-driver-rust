@@ -1,6 +1,6 @@
 use crate::api::QldbSessionApi;
 use crate::rusoto_ext::*;
-use crate::transaction::{Transaction, TransactionDisposition, TransactionOutcome};
+use crate::transaction::{TransactionAttempt, TransactionDisposition, TransactionOutcome};
 use crate::{
     pool::SessionPool, retry::default_retry_policy, retry::TransactionRetryPolicy, QldbError,
 };
@@ -199,7 +199,7 @@ impl QldbDriver {
     pub async fn transact<F, Fut, R>(&self, transaction: F) -> Result<R, Box<dyn StdError>>
     where
         Fut: Future<Output = Result<TransactionOutcome<R>, Box<dyn StdError>>>,
-        F: Fn(Transaction) -> Fut,
+        F: Fn(TransactionAttempt) -> Fut,
     {
         let mut attempt_number = 0u32;
 
@@ -209,27 +209,29 @@ impl QldbDriver {
             let session_handle = self.session_pool.next().await?;
             let session_token = &session_handle.session_token;
 
-            let (tx, mut receiver) =
-                match Transaction::start(self.client.clone(), session_handle.session_token.clone())
-                    .await
-                {
-                    Ok(tx) => tx,
-                    Err(qldb_err) => {
-                        if let QldbError::Rusoto(RusotoError::Service(
-                            SendCommandError::BadRequest(message),
-                        )) = qldb_err
-                        {
-                            debug!(
+            let (tx, mut receiver) = match TransactionAttempt::start(
+                self.client.clone(),
+                session_handle.session_token.clone(),
+            )
+            .await
+            {
+                Ok(tx) => tx,
+                Err(qldb_err) => {
+                    if let QldbError::Rusoto(RusotoError::Service(SendCommandError::BadRequest(
+                        message,
+                    ))) = qldb_err
+                    {
+                        debug!(
                             "unable to start a transaction on session {} (will be discarded): {}",
                             session_token, message
                         );
-                            session_handle.notify_invalid();
-                        }
-
-                        // FIXME: Include some sort of sleep and attempt cap.
-                        continue;
+                        session_handle.notify_invalid();
                     }
-                };
+
+                    // FIXME: Include some sort of sleep and attempt cap.
+                    continue;
+                }
+            };
             let tx_id = tx.id.clone();
 
             // Run the user's transaction. They can run methods on [`Transaction`] such as [`execute_statement`]. When this future completes, one of 4 things could have happened:
@@ -389,7 +391,7 @@ impl BlockingQldbDriver {
     pub fn transact<F, Fut, R>(&self, transaction: F) -> Result<R, Box<dyn StdError>>
     where
         Fut: Future<Output = Result<TransactionOutcome<R>, Box<dyn StdError>>>,
-        F: Fn(Transaction) -> Fut,
+        F: Fn(TransactionAttempt) -> Fut,
     {
         let runtime = self.runtime.borrow();
         let fun = &transaction;
