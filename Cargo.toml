@@ -7,7 +7,8 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-thiserror = "1.0.23"
+thiserror = "1.0"
+anyhow = "1.0"
 tokio = "1.0.1"
 bytes = "1.0.1"
 async-trait = "0.1.42"
@@ -18,6 +19,7 @@ log = "0.4.13"
 ion-c-sys = "0.4.3"
 rand = "0.8.2"
 futures = "0.3.11"
+bb8 = "0.7.0"
 
 [dev-dependencies]
 hex-literal = "0.3.1"

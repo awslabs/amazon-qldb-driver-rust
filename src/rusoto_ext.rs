@@ -15,9 +15,15 @@ use rusoto_core::credential::{AwsCredentials, CredentialsError, ProvideAwsCreden
 ///  {
 /// ```
 ///
-/// While the constructor is generic, the concrete type is not. This is nice, because the user-exposed type isn't generic over the specific credential provider, etc. The
-/// [`QldbDriverBuilder`] has a similar design challenge, but the fluent builder design doesn't leave the option actually accepting generics. So, we use a Box type in our builder, then
-/// implement `ProvideAwsCredentials` for that type. This satisfies the above constraints whilst keeping our API clean.
+/// While the constructor is generic, the concrete type is not. This is nice,
+/// because the user-exposed type isn't generic over the specific credential
+/// provider, etc.
+///
+/// The [`QldbDriverBuilder`] has a similar design challenge, but the fluent
+/// builder design doesn't leave the option actually accepting generics. So, we
+/// use a Box type in our builder, then implement `ProvideAwsCredentials` for
+/// that type. This satisfies the above constraints whilst keeping our API
+/// clean.
 pub(crate) fn into_boxed<P>(unboxed: P) -> BoxedCredentialsProvider
 where
     P: ProvideAwsCredentials + Send + Sync + 'static,

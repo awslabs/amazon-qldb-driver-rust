@@ -1,11 +1,9 @@
 use crate::QldbError;
-use async_trait::async_trait;
 use rand::thread_rng;
 use rand::Rng;
 use rusoto_core::RusotoError;
 use rusoto_qldb_session::*;
 use std::{cmp::min, time::Duration};
-use tokio::time::sleep;
 
 pub fn default_retry_policy() -> impl TransactionRetryPolicy {
     ExponentialBackoffJitterTransactionRetryPolicy::default()
@@ -15,20 +13,39 @@ pub fn never() -> impl TransactionRetryPolicy {
     NeverRetryPolicy {}
 }
 
+pub struct RetryInstructions {
+    pub should_retry: bool,
+    pub delay: Option<Duration>,
+}
+
+impl RetryInstructions {
+    fn dont() -> RetryInstructions {
+        RetryInstructions {
+            should_retry: false,
+            delay: None,
+        }
+    }
+
+    fn after(delay: Duration) -> RetryInstructions {
+        RetryInstructions {
+            should_retry: true,
+            delay: Some(delay),
+        }
+    }
+}
+
 /// A retry policy receives an `error` and the `attempt_number` and returns true/false based on whether the driver should retry or not. The function [`on_err`] is marked `async` to allow
 /// implementations to model features such as backoff-jitter without blocking the runtime.
-#[async_trait]
 pub trait TransactionRetryPolicy {
-    async fn on_err(&self, error: &QldbError, attempt_number: u32) -> bool;
+    fn on_err(&self, error: &QldbError, attempt_number: u32) -> RetryInstructions;
 }
 
 /// Don't try this at home.
 pub struct NeverRetryPolicy {}
 
-#[async_trait]
 impl TransactionRetryPolicy for NeverRetryPolicy {
-    async fn on_err(&self, _error: &QldbError, _attempt_number: u32) -> bool {
-        false
+    fn on_err(&self, _error: &QldbError, _attempt_number: u32) -> RetryInstructions {
+        RetryInstructions::dont()
     }
 }
 
@@ -59,9 +76,8 @@ impl Default for ExponentialBackoffJitterTransactionRetryPolicy {
     }
 }
 
-#[async_trait]
 impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
-    async fn on_err(&self, error: &QldbError, attempt_number: u32) -> bool {
+    fn on_err(&self, error: &QldbError, attempt_number: u32) -> RetryInstructions {
         match error {
             QldbError::Rusoto(e) => {
                 let should_retry = match &e {
@@ -84,16 +100,14 @@ impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
                 };
 
                 if !should_retry || attempt_number > self.max_attempts {
-                    return false;
+                    return RetryInstructions::dont();
                 } else {
                     let delay =
                         exponential_backoff_with_jitter(self.base, self.cap, attempt_number);
-                    sleep(Duration::from_millis(delay as u64)).await;
-
-                    return true;
+                    return RetryInstructions::after(Duration::from_millis(delay as u64));
                 }
             }
-            _ => return false,
+            _ => return RetryInstructions::dont(),
         }
     }
 }
@@ -131,5 +145,13 @@ mod tests {
         }
 
         assert!(seq.is_empty());
+    }
+
+    #[test]
+    fn policies_are_send_and_sync() {
+        fn is_send_and_sync<T: Send + Sync>() {}
+
+        is_send_and_sync::<NeverRetryPolicy>();
+        is_send_and_sync::<ExponentialBackoffJitterTransactionRetryPolicy>();
     }
 }

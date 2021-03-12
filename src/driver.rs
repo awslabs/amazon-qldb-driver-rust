@@ -1,18 +1,21 @@
-use crate::api::QldbSessionApi;
 use crate::rusoto_ext::*;
 use crate::transaction::{TransactionAttempt, TransactionDisposition, TransactionOutcome};
+use crate::{api::QldbSessionApi, pool::QldbErrorLoggingErrorSink};
 use crate::{
-    pool::SessionPool, retry::default_retry_policy, retry::TransactionRetryPolicy, QldbError,
+    pool::QldbSessionManager, retry::default_retry_policy, retry::TransactionRetryPolicy, QldbError,
 };
+use anyhow::Result;
+use bb8::Pool;
 use runtime::Runtime;
 use rusoto_core::{
     credential::{DefaultCredentialsProvider, ProvideAwsCredentials},
     Client, HttpClient, Region, RusotoError,
 };
 use rusoto_qldb_session::*;
-use std::error::Error as StdError;
+use std::sync::Arc;
 use std::{cell::RefCell, future::Future};
-use tokio::runtime;
+use tokio::time::sleep;
+use tokio::{runtime, sync::Mutex};
 
 /// A builder to help you customize a [`QldbDriver`].
 ///
@@ -40,19 +43,19 @@ use tokio::runtime;
 /// ```
 pub struct QldbDriverBuilder {
     ledger_name: Option<String>,
-    credentials_provider: BoxedCredentialsProvider,
+    credentials_provider: Option<BoxedCredentialsProvider>,
     region: Option<Region>,
-    transaction_retry_policy: Box<dyn TransactionRetryPolicy>,
-    max_concurrent_transactions: usize,
+    transaction_retry_policy: Box<dyn TransactionRetryPolicy + Send + Sync>,
+    max_concurrent_transactions: u32,
 }
 
 impl Default for QldbDriverBuilder {
     fn default() -> Self {
         QldbDriverBuilder {
             ledger_name: None,
-            credentials_provider: into_boxed(
+            credentials_provider: Some(into_boxed(
                 DefaultCredentialsProvider::new().expect("failed to create credentials provider"),
-            ),
+            )),
             region: None,
             transaction_retry_policy: Box::new(default_retry_policy()),
             max_concurrent_transactions: 1500,
@@ -77,7 +80,7 @@ impl QldbDriverBuilder {
     where
         P: ProvideAwsCredentials + Send + Sync + 'static,
     {
-        self.credentials_provider = into_boxed(credentials_provider);
+        self.credentials_provider = Some(into_boxed(credentials_provider));
         self
     }
 
@@ -94,31 +97,61 @@ impl QldbDriverBuilder {
         self
     }
 
-    pub fn max_sessions(mut self, max_sessions: usize) -> Self {
+    pub fn max_sessions(mut self, max_sessions: u32) -> Self {
         self.max_concurrent_transactions = max_sessions;
         self
     }
 
-    pub fn build(self) -> Result<QldbDriver, Box<dyn StdError>> {
-        let ledger_name = self.ledger_name.ok_or("ledger_name must be initialized")?;
-        let client = Client::new_with(self.credentials_provider, default_dispatcher()?);
-        let region = self.region.unwrap_or(Region::default());
+    // FIXME: It's messy that we need to wrap credentials_provider in an Option
+    // just so we can avoid the partial move of self here (into
+    // build_with_client). Suggestion: refactor the builder to cleanly separate
+    // out the client builder.
+    pub fn build(mut self) -> Result<QldbDriver<QldbSessionClient>> {
+        let client = Client::new_with(
+            self.credentials_provider.take().unwrap(),
+            default_dispatcher()?,
+        );
+        let region = match self.region {
+            Some(ref r) => r.clone(),
+            None => Region::default(),
+        };
         let qldb_client = QldbSessionClient::new_with_client(client, region);
+        self.build_with_client(qldb_client)
+    }
+
+    pub fn build_with_client<C>(self, client: C) -> Result<QldbDriver<C>>
+    where
+        C: QldbSession + Send + Sync + Clone + 'static,
+    {
+        let ledger_name = self.ledger_name.ok_or(QldbError::UsageError(
+            "ledger_name must be initialized".to_string(),
+        ))?;
+
+        let transaction_retry_policy = Arc::new(Mutex::new(self.transaction_retry_policy));
+
+        // bb8's [build_unchecked] method doesn't establish initial connections,
+        // which is what we want. The '_unchecked' bit might sound scary, but it
+        // (no eager-connect) is actually what we want!
+        let session_pool = Pool::builder()
+            .test_on_check_out(false)
+            .max_lifetime(None)
+            .max_size(self.max_concurrent_transactions)
+            .error_sink(Box::new(QldbErrorLoggingErrorSink::new()))
+            .build_unchecked(QldbSessionManager {
+                client: client.clone(),
+                ledger_name: ledger_name.clone(),
+            });
 
         Ok(QldbDriver {
-            ledger_name: ledger_name.clone(),
-            client: qldb_client.clone(),
-            session_pool: SessionPool::new(
-                qldb_client.clone(),
-                ledger_name.clone(),
-                self.max_concurrent_transactions,
-            ),
-            transaction_retry_policy: self.transaction_retry_policy,
+            ledger_name: Arc::new(ledger_name.clone()),
+            client: client.clone(),
+            session_pool: Arc::new(session_pool),
+            transaction_retry_policy,
         })
     }
 }
 
-fn default_dispatcher() -> Result<HttpClient, Box<dyn StdError>> {
+fn default_dispatcher() -> Result<HttpClient> {
     let mut client = HttpClient::new()?;
     client.local_agent(format!(
         "QLDB Driver for Rust v{}",
@@ -127,43 +160,88 @@ fn default_dispatcher() -> Result<HttpClient, Box<dyn StdError>> {
     Ok(client)
 }
 
-// FIXME: Make trait, make Clone/Sync?
-pub struct QldbDriver {
-    ledger_name: String,
-    client: QldbSessionClient,
-    session_pool: SessionPool,
-    transaction_retry_policy: Box<dyn TransactionRetryPolicy>,
+/// ## Concurrency
+///
+/// End users of the driver should call `clone` and drive concurrency off the
+/// clones. Under the hood, no actual copy is made. The driver will pool
+/// sessions across clones.
+///
+/// The work the QLDB driver does is:
+///
+/// 1. Running user transaction logic
+/// 2. Communicating with the QLDB service
+///
+/// Running user code requires true concurrency, as the code could do anything
+/// (by design). For example, it might be perfectly reasonable to start a
+/// transaction and do some CPU bound work for a few seconds before proceeding
+/// to update some value. To scale this out, you need real OS threads.
+///
+/// However, communicating with the service is almost entirely IO bound and sits
+/// on top of an async based stack.
+///
+/// The intersection is a little tricky. A transaction needs a session and if it
+/// encounters an error it needs to know if it should retry. If we have true
+/// concurrency of transactions, then does that imply our session pool and retry
+/// policies also need to be `Send + Sync`?
+///
+/// The session pool is internal to the driver. It is a requirement that the
+/// same pool be used across threads, and thus the pool must be `Send + Sync`.
+/// You can read the documentation on [`SessionPool`] to see how we achieve
+/// that.
+///
+/// Retry policies are not internal to the driver (even though there are default
+/// policies). An important design question is whether or not a retry policy
+/// should be able to make a decision based on all in-flight (or past)
+/// transactions. If the answer is 'no', then we could make the decision that
+/// every thread using the driver gets a clone of the policy. This would enable
+/// common use-cases like backoff-jitter, but prevent more complicated use-cases
+/// such as circuit breakers. Both of these answers suck, so instead of picking
+/// we wrap all policies in a Mutex. Performance of a Mutex is unlikely to be
+/// the limiting factor in a QLDB application.
+#[derive(Clone)]
+pub struct QldbDriver<C>
+where
+    C: QldbSession + Send + Sync + Clone + 'static,
+{
+    ledger_name: Arc<String>,
+    client: C,
+    session_pool: Arc<Pool<QldbSessionManager<C>>>,
+    transaction_retry_policy: Arc<Mutex<Box<dyn TransactionRetryPolicy + Send + Sync>>>,
 }
 
-impl QldbDriver {
-    /// Discovery shortcut: use the builder!
-    pub fn builder() -> QldbDriverBuilder {
-        QldbDriverBuilder::new()
-    }
-
+impl<C> QldbDriver<C>
+where
+    C: QldbSession + Send + Sync + Clone,
+{
     pub fn ledger_name(&self) -> String {
-        self.ledger_name.clone()
+        (*self.ledger_name).clone()
     }
 
     /// Execute a transaction against QLDB, retrying as necessary.
     ///
-    /// This function is the primary way you should interact with QLDB. The driver will acquire a connection and open a [`Transaction`], handing it to your code (the closure you pass
-    /// in). The driver will run your transaction and attempt to commit it. While executing the transaction, failures may occur. The driver will retry (acquire a new transaction and run your
-    /// code again). This means your code *must be idempotent*.
+    /// This function is the primary way you should interact with QLDB. The
+    /// driver will acquire a connection and open a [`Transaction`], handing it
+    /// to your code (the closure you pass in). The driver will run your
+    /// transaction and attempt to commit it. While executing the transaction,
+    /// failures may occur. The driver will retry (acquire a new transaction and
+    /// run your code again). This means your code *must be idempotent*.
     ///
-    /// If you wish to get results out of your transaction, you must return them from your closure. Do not attempt to write to variables outside of your closure! You should consider code
-    /// running inside the closure as seeing speculative results that are only confirmed once the transaction commits.
+    /// If you wish to get results out of your transaction, you must return them
+    /// from your closure. Do not attempt to write to variables outside of your
+    /// closure! You should consider code running inside the closure as seeing
+    /// speculative results that are only confirmed once the transaction
+    /// commits.
     ///
     /// Here is some example code:
     ///
     /// ```no_run
     /// use tokio;
-    /// use amazon_qldb_driver::QldbDriver;
+    /// use amazon_qldb_driver::QldbDriverBuilder;
     /// use rusoto_core::region::Region;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let driver = QldbDriver::builder().ledger_name("sample-ledger").build()?;
+    ///     let driver = QldbDriverBuilder::new().ledger_name("sample-ledger").build()?;
     ///     let (a, b) = driver.transact(|mut tx| async {
     ///         let a = tx.execute_statement("SELECT 1").await?;
     ///         let b = tx.execute_statement("SELECT 2").await?;
@@ -174,17 +252,19 @@ impl QldbDriver {
     /// }
     /// ```
     ///
-    /// Note that the `transaction` argument is `Fn` not `FnOnce` or `FnMut`. This is to support retries (of the entire transaction) and ensure that your function is idempotent (cannot
-    /// mutate the environment it captures). For example the following will not compile:
+    /// Note that the `transaction` argument is `Fn` not `FnOnce` or `FnMut`.
+    /// This is to support retries (of the entire transaction) and ensure that
+    /// your function is idempotent (cannot mutate the environment it captures).
+    /// For example the following will not compile:
     ///
     /// ```compile_fail
     /// # use tokio;
-    /// # use amazon_qldb_driver::QldbDriver;
+    /// # use amazon_qldb_driver::QldbDriverBuilder;
     /// # use rusoto_core::region::Region;
     /// #
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// #   let driver = QldbDriver::builder().ledger_name("sample-ledger").build()?;
+    /// #   let driver = QldbDriverBuilder::new().ledger_name("sample-ledger").build()?;
     ///     let mut string = String::new();
     ///     driver.transact(|tx| async {
     ///        string.push('1');
@@ -196,42 +276,38 @@ impl QldbDriver {
     /// ```
     ///
     /// Again, this is because `transaction` is `Fn` not `FnMut` and thus is not allowed to mutate `string`.
-    pub async fn transact<F, Fut, R>(&self, transaction: F) -> Result<R, Box<dyn StdError>>
+    pub async fn transact<F, Fut, R>(&self, transaction: F) -> Result<R>
     where
-        Fut: Future<Output = Result<TransactionOutcome<R>, Box<dyn StdError>>>,
-        F: Fn(TransactionAttempt) -> Fut,
+        Fut: Future<Output = Result<TransactionOutcome<R>>>,
+        F: Fn(TransactionAttempt<C>) -> Fut,
     {
         let mut attempt_number = 0u32;
 
         loop {
             attempt_number += 1;
 
-            let session_handle = self.session_pool.next().await?;
-            let session_token = &session_handle.session_token;
+            let mut pooled_session = self.session_pool.get().await?;
+            let session_token = &pooled_session.token;
 
-            let (tx, mut receiver) = match TransactionAttempt::start(
-                self.client.clone(),
-                session_handle.session_token.clone(),
-            )
-            .await
-            {
-                Ok(tx) => tx,
-                Err(qldb_err) => {
-                    if let QldbError::Rusoto(RusotoError::Service(SendCommandError::BadRequest(
-                        message,
-                    ))) = qldb_err
-                    {
-                        debug!(
+            let (tx, mut receiver) =
+                match TransactionAttempt::start(self.client.clone(), session_token.clone()).await {
+                    Ok(tx) => tx,
+                    Err(qldb_err) => {
+                        if let QldbError::Rusoto(RusotoError::Service(
+                            SendCommandError::BadRequest(message),
+                        )) = qldb_err
+                        {
+                            debug!(
                             "unable to start a transaction on session {} (will be discarded): {}",
                             session_token, message
                         );
-                        session_handle.notify_invalid();
-                    }
+                            pooled_session.notify_invalid();
+                        }
 
-                    // FIXME: Include some sort of sleep and attempt cap.
-                    continue;
-                }
-            };
+                        // FIXME: Include some sort of sleep and attempt cap.
+                        continue;
+                    }
+                };
             let tx_id = tx.id.clone();
 
             // Run the user's transaction. They can run methods on [`Transaction`] such as [`execute_statement`]. When this future completes, one of 4 things could have happened:
@@ -270,7 +346,7 @@ impl QldbDriver {
                                 }
                                 Err(e) => {
                                     debug!("ignoring failure to abort tx {}: {}", a.tx_id, e);
-                                    session_handle.notify_invalid();
+                                    pooled_session.notify_invalid();
                                 }
                             };
 
@@ -293,7 +369,7 @@ impl QldbDriver {
                         Ok(qldb_err) => {
                             // This error will flow through the next match statement to the error handling block at the bottom. It would be cleaner to extract and call and error handler
                             // here, but that function lands up capturing so many variables it's not worth it.
-                            Err(*qldb_err)
+                            Err(qldb_err)
                         }
                         // This branch means the transaction block failed with a non-QldbError. This means something unrelated to QLDB went wrong.
                         Err(other) => {
@@ -340,18 +416,23 @@ impl QldbDriver {
                         SendCommandError::InvalidSession(_),
                     )) = e
                     {
-                        session_handle.notify_invalid();
+                        pooled_session.notify_invalid();
                     }
 
-                    let should_retry = self
-                        .transaction_retry_policy
-                        .on_err(&e, attempt_number)
-                        .await;
-                    if should_retry {
+                    let retry_ins = {
+                        let policy = self.transaction_retry_policy.lock().await;
+                        policy.on_err(&e, attempt_number)
+                    };
+
+                    if retry_ins.should_retry {
                         debug!(
                             "Error comitting ({}) on attempt {}, will retry",
                             e, attempt_number
                         );
+                        if let Some(duration) = retry_ins.delay {
+                            debug!("Retry will be delayed by {} millis", duration.as_millis());
+                            sleep(duration).await;
+                        }
                     } else {
                         debug!(
                             "Not retrying after {} attempts due to error: {}",
@@ -367,34 +448,121 @@ impl QldbDriver {
         }
     }
 
-    pub fn into_blocking(self) -> Result<BlockingQldbDriver, Box<dyn std::error::Error>> {
+    pub fn into_blocking(self) -> Result<BlockingQldbDriver<C>> {
         BlockingQldbDriver::new(self)
     }
 }
 
-pub struct BlockingQldbDriver {
-    async_driver: QldbDriver,
+pub struct BlockingQldbDriver<C>
+where
+    C: QldbSession + Send + Sync + Clone + 'static,
+{
+    async_driver: QldbDriver<C>,
     runtime: RefCell<Runtime>,
 }
 
-impl BlockingQldbDriver {
-    fn new(async_driver: QldbDriver) -> Result<BlockingQldbDriver, Box<dyn std::error::Error>> {
+impl<C> BlockingQldbDriver<C>
+where
+    C: QldbSession + Send + Sync + Clone,
+{
+    fn new(async_driver: QldbDriver<C>) -> Result<BlockingQldbDriver<C>> {
         let runtime = runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
         Ok(BlockingQldbDriver {
-            async_driver: async_driver,
+            async_driver,
             runtime: RefCell::new(runtime),
         })
     }
 
-    pub fn transact<F, Fut, R>(&self, transaction: F) -> Result<R, Box<dyn StdError>>
+    pub fn transact<F, Fut, R>(&self, transaction: F) -> Result<R>
     where
-        Fut: Future<Output = Result<TransactionOutcome<R>, Box<dyn StdError>>>,
-        F: Fn(TransactionAttempt) -> Fut,
+        Fut: Future<Output = Result<TransactionOutcome<R>>>,
+        F: Fn(TransactionAttempt<C>) -> Fut,
     {
         let runtime = self.runtime.borrow();
         let fun = &transaction;
         runtime.block_on(async move { self.async_driver.transact(fun).await })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::testing::TestQldbSessionClient;
+    use crate::ion_compat::ion_hash;
+    use crate::qldb_hash::QldbHash;
+    use anyhow::Result;
+    use tokio::spawn;
+
+    // This test shows how to clone the driver for use in a multi-threaded tokio
+    // runtime. It's really just a compile test in that no actual transactions
+    // are run with expected results.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn multi_thread_example() -> Result<()> {
+        // this driver will be used concurrently.
+        let mut mock = TestQldbSessionClient::new();
+        let driver = QldbDriverBuilder::new()
+            .ledger_name("multi_thread_example")
+            .build_with_client(mock.clone())?;
+
+        // This is a very terrible mock. This test will fail randomly based on
+        // whether tx-0 or tx-1 completes first. But it's what I was able to get
+        // done quickly!
+        for sid in 0..2 {
+            mock.respond(
+                "StartSession",
+                Ok(SendCommandResult {
+                    start_session: Some(StartSessionResult {
+                        session_token: Some(format!("session-{}", sid)),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            );
+
+            let transaction_id = format!("tx-{}", sid);
+
+            mock.respond(
+                "StartTransaction",
+                Ok(SendCommandResult {
+                    start_transaction: Some(StartTransactionResult {
+                        transaction_id: Some(transaction_id.clone()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            );
+
+            let seed_hash = ion_hash(&transaction_id);
+            let commit_digest = QldbHash::from_bytes(seed_hash).unwrap();
+
+            mock.respond(
+                "CommitTransaction",
+                Ok(SendCommandResult {
+                    commit_transaction: Some(CommitTransactionResult {
+                        transaction_id: Some(transaction_id.clone()),
+                        commit_digest: Some(commit_digest.bytes()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            );
+        }
+
+        let fut_1 = spawn({
+            let driver = driver.clone();
+            async move { driver.transact(|tx| async { tx.ok(()).await }).await }
+        });
+
+        let fut_2 = spawn({
+            let driver = driver.clone();
+            async move { driver.transact(|tx| async { tx.ok(()).await }).await }
+        });
+
+        fut_1.await??;
+        fut_2.await??;
+
+        Ok(())
     }
 }

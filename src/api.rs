@@ -67,7 +67,10 @@ pub trait QldbSessionApi {
 }
 
 #[async_trait]
-impl QldbSessionApi for QldbSessionClient {
+impl<C> QldbSessionApi for C
+where
+    C: QldbSession + Send + Sync,
+{
     async fn abort_transaction(
         &self,
         session_token: &SessionToken,
@@ -259,5 +262,86 @@ impl QldbSessionApi for QldbSessionClient {
             .ok_or(QldbError::UnexpectedResponse(
                 "StartTransaction requests should return StartTransaction responses".into(),
             ))?)
+    }
+}
+
+#[cfg(test)]
+pub mod testing {
+    use super::*;
+    use rusoto_core::RusotoError;
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
+
+    #[derive(Clone)]
+    pub struct TestQldbSessionClient {
+        inner: Arc<TestQldbSessionClientInner>,
+    }
+
+    // This is not a very good mock, but it'll do. Each request variant has a
+    // queue of responses.
+    //
+    // We use a Mutex for interior mutability, since `send_command` takes
+    // `&self`.
+    struct TestQldbSessionClientInner {
+        queue:
+            Mutex<HashMap<String, Vec<Result<SendCommandResult, RusotoError<SendCommandError>>>>>,
+    }
+
+    impl TestQldbSessionClient {
+        pub fn new() -> TestQldbSessionClient {
+            TestQldbSessionClient {
+                inner: Arc::new(TestQldbSessionClientInner {
+                    queue: Mutex::new(HashMap::new()),
+                }),
+            }
+        }
+
+        pub fn respond<S: Into<String>>(
+            &mut self,
+            variant: S,
+            with: Result<SendCommandResult, RusotoError<SendCommandError>>,
+        ) {
+            let mut queue = self.inner.queue.lock().unwrap();
+            let entry = queue.entry(variant.into()).or_insert(vec![]);
+            entry.insert(0, with);
+        }
+    }
+
+    impl Default for TestQldbSessionClient {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    #[async_trait]
+    impl QldbSession for TestQldbSessionClient {
+        async fn send_command(
+            &self,
+            input: SendCommandRequest,
+        ) -> Result<SendCommandResult, RusotoError<SendCommandError>> {
+            let mut queue = self.inner.queue.lock().unwrap();
+            let variant = match input {
+                SendCommandRequest {
+                    start_session: Some(_),
+                    ..
+                } => "StartSession",
+                SendCommandRequest {
+                    start_transaction: Some(_),
+                    ..
+                } => "StartTransaction",
+                SendCommandRequest {
+                    commit_transaction: Some(_),
+                    ..
+                } => "CommitTransaction",
+                _ => todo!(),
+            };
+
+            match queue.get_mut(variant).map(|v| v.pop()) {
+                Some(Some(response)) => response,
+                _ => panic!("Invalid usage of TestQldbSessionClient (no response was prepared). Request follows:\n{:#?}", input),
+            }
+        }
     }
 }

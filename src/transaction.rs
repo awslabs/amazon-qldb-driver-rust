@@ -5,12 +5,11 @@ use crate::{
     api::{QldbSessionApi, SessionToken, TransactionId},
     execution_stats::ExecutionStats,
 };
+use anyhow::Result;
 use bytes::Bytes;
 use ion_c_sys::reader::IonCReaderHandle;
 use ion_c_sys::result::IonCError;
-use rusoto_qldb_session::QldbSessionClient;
 use std::convert::TryFrom;
-use std::error::Error as StdError;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 /// The results of executing a statement.
@@ -62,8 +61,8 @@ pub struct TransactionOutcome<R> {
     pub(crate) user_data: R,
 }
 
-pub struct TransactionAttempt {
-    client: Box<dyn QldbSessionApi>,
+pub struct TransactionAttempt<C: QldbSessionApi + Send> {
+    client: C,
     session_token: SessionToken,
     pub id: TransactionId,
     commit_digest: QldbHash,
@@ -71,11 +70,14 @@ pub struct TransactionAttempt {
     execution_stats: ExecutionStats,
 }
 
-impl TransactionAttempt {
+impl<C> TransactionAttempt<C>
+where
+    C: QldbSessionApi + Send,
+{
     pub(crate) async fn start(
-        client: QldbSessionClient,
+        client: C,
         session_token: SessionToken,
-    ) -> Result<(TransactionAttempt, Receiver<QldbHash>), QldbError> {
+    ) -> Result<(TransactionAttempt<C>, Receiver<QldbHash>), QldbError> {
         let mut execution_stats = ExecutionStats::default();
         let start_result = client.start_transaction(&session_token).await?;
         execution_stats.accumulate(&start_result);
@@ -89,7 +91,7 @@ impl TransactionAttempt {
         let seed_hash = ion_hash(&id);
         let commit_digest = QldbHash::from_bytes(seed_hash).unwrap();
         let transaction = TransactionAttempt {
-            client: Box::new(client),
+            client,
             session_token,
             id,
             commit_digest,
@@ -158,7 +160,7 @@ impl TransactionAttempt {
         Ok(StatementResults::new(values, execution_stats))
     }
 
-    pub async fn ok<R>(self, user_data: R) -> Result<TransactionOutcome<R>, Box<dyn StdError>> {
+    pub async fn ok<R>(self, user_data: R) -> Result<TransactionOutcome<R>> {
         self.channel.send(self.commit_digest).await?;
 
         Ok(TransactionOutcome {
@@ -169,7 +171,7 @@ impl TransactionAttempt {
         })
     }
 
-    pub async fn abort<R>(self, user_data: R) -> Result<TransactionOutcome<R>, Box<dyn StdError>> {
+    pub async fn abort<R>(self, user_data: R) -> Result<TransactionOutcome<R>> {
         Ok(TransactionOutcome {
             tx_id: self.id,
             disposition: TransactionDisposition::Abort,
