@@ -1,5 +1,5 @@
 use amazon_qldb_driver::ion_compat;
-use amazon_qldb_driver::QldbDriver;
+use amazon_qldb_driver::QldbDriverBuilder;
 use rusoto_core::Region;
 use tokio;
 #[macro_use]
@@ -10,7 +10,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     info!("Creating a QLDB driver");
-    let driver = QldbDriver::builder()
+    let driver = QldbDriverBuilder::new()
         .ledger_name("sample-ledger")
         .region(Region::UsWest2)
         .build()?;
