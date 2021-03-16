@@ -490,8 +490,6 @@ where
 mod tests {
     use super::*;
     use crate::api::testing::TestQldbSessionClient;
-    use crate::ion_compat::ion_hash;
-    use crate::qldb_hash::QldbHash;
     use anyhow::Result;
     use tokio::spawn;
 
@@ -501,54 +499,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn multi_thread_example() -> Result<()> {
         // this driver will be used concurrently.
-        let mut mock = TestQldbSessionClient::new();
+        let mock = TestQldbSessionClient::new();
         let driver = QldbDriverBuilder::new()
             .ledger_name("multi_thread_example")
             .build_with_client(mock.clone())?;
-
-        // This is a very terrible mock. This test will fail randomly based on
-        // whether tx-0 or tx-1 completes first. But it's what I was able to get
-        // done quickly!
-        for sid in 0..2 {
-            mock.respond(
-                "StartSession",
-                Ok(SendCommandResult {
-                    start_session: Some(StartSessionResult {
-                        session_token: Some(format!("session-{}", sid)),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }),
-            );
-
-            let transaction_id = format!("tx-{}", sid);
-
-            mock.respond(
-                "StartTransaction",
-                Ok(SendCommandResult {
-                    start_transaction: Some(StartTransactionResult {
-                        transaction_id: Some(transaction_id.clone()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }),
-            );
-
-            let seed_hash = ion_hash(&transaction_id);
-            let commit_digest = QldbHash::from_bytes(seed_hash).unwrap();
-
-            mock.respond(
-                "CommitTransaction",
-                Ok(SendCommandResult {
-                    commit_transaction: Some(CommitTransactionResult {
-                        transaction_id: Some(transaction_id.clone()),
-                        commit_digest: Some(commit_digest.bytes()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }),
-            );
-        }
 
         let fut_1 = spawn({
             let driver = driver.clone();
