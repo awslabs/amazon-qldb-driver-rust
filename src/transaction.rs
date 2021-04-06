@@ -160,14 +160,19 @@ where
         Ok(StatementResults::new(values, execution_stats))
     }
 
+    #[deprecated(note = "Please use commit instead")]
     pub async fn ok<R>(self, user_data: R) -> Result<TransactionOutcome<R>> {
+        self.commit(user_data)
+    }
+
+    pub async fn commit<R>(self, user_data: R) -> Result<TransactionOutcome<R>> {
         self.channel.send(self.commit_digest).await?;
 
         Ok(TransactionOutcome {
             tx_id: self.id,
             disposition: TransactionDisposition::Commit,
             execution_stats: self.execution_stats,
-            user_data: user_data,
+            user_data,
         })
     }
 
@@ -176,7 +181,7 @@ where
             tx_id: self.id,
             disposition: TransactionDisposition::Abort,
             execution_stats: self.execution_stats,
-            user_data: user_data,
+            user_data,
         })
     }
 }
