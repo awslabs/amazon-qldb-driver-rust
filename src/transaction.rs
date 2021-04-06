@@ -1,16 +1,15 @@
-use crate::ion_compat::ion_hash;
 use crate::qldb_hash::QldbHash;
 use crate::QldbError;
 use crate::{
-    api::{QldbSessionApi, SessionToken, TransactionId},
+    api::{QldbSessionApi, TransactionId},
     execution_stats::ExecutionStats,
 };
+use crate::{ion_compat::ion_hash, pool::QldbHttp1Connection};
 use anyhow::Result;
 use bytes::Bytes;
 use ion_c_sys::reader::IonCReaderHandle;
 use ion_c_sys::result::IonCError;
 use std::convert::TryFrom;
-use tokio::sync::mpsc::{self, Receiver, Sender};
 
 /// The results of executing a statement.
 ///
@@ -55,18 +54,15 @@ pub enum TransactionDisposition {
 }
 
 pub struct TransactionOutcome<R> {
-    pub(crate) tx_id: TransactionId,
     pub(crate) disposition: TransactionDisposition,
-    pub(crate) execution_stats: ExecutionStats,
-    pub(crate) user_data: R,
+    pub(crate) response: Result<R, QldbError>,
 }
 
 pub struct TransactionAttempt<C: QldbSessionApi + Send> {
     client: C,
-    session_token: SessionToken,
+    pooled_session: QldbHttp1Connection,
     pub id: TransactionId,
     commit_digest: QldbHash,
-    channel: Sender<QldbHash>,
     execution_stats: ExecutionStats,
 }
 
@@ -76,10 +72,12 @@ where
 {
     pub(crate) async fn start(
         client: C,
-        session_token: SessionToken,
-    ) -> Result<(TransactionAttempt<C>, Receiver<QldbHash>), QldbError> {
+        pooled_session: QldbHttp1Connection,
+    ) -> Result<TransactionAttempt<C>, QldbError> {
         let mut execution_stats = ExecutionStats::default();
-        let start_result = client.start_transaction(&session_token).await?;
+        let start_result = client
+            .start_transaction(&pooled_session.session_token())
+            .await?;
         execution_stats.accumulate(&start_result);
         let id = start_result
             .transaction_id
@@ -87,18 +85,16 @@ where
                 "StartTransaction should always return a transaction_id".into(),
             ))?;
 
-        let (sender, receiver) = mpsc::channel(1);
         let seed_hash = ion_hash(&id);
         let commit_digest = QldbHash::from_bytes(seed_hash).unwrap();
         let transaction = TransactionAttempt {
             client,
-            session_token,
+            pooled_session,
             id,
             commit_digest,
-            channel: sender,
             execution_stats,
         };
-        Ok((transaction, receiver))
+        Ok(transaction)
     }
 
     // FIXME: params, result, IonHash
@@ -114,7 +110,11 @@ where
         let mut execution_stats = ExecutionStats::default();
         let execute_result = self
             .client
-            .execute_statement(&self.session_token, &self.id, statement.clone())
+            .execute_statement(
+                &self.pooled_session.session_token(),
+                &self.id,
+                statement.clone(),
+            )
             .await?;
         execution_stats.accumulate(&execute_result);
 
@@ -144,7 +144,11 @@ where
                 if let Some(next_page_token) = page.next_page_token {
                     let fetch_page_result = self
                         .client
-                        .fetch_page(&self.session_token, &self.id, next_page_token)
+                        .fetch_page(
+                            &self.pooled_session.session_token(),
+                            &self.id,
+                            next_page_token,
+                        )
                         .await?;
 
                     execution_stats.accumulate(&fetch_page_result);
@@ -165,23 +169,70 @@ where
         self.commit(user_data).await
     }
 
-    pub async fn commit<R>(self, user_data: R) -> Result<TransactionOutcome<R>> {
-        self.channel.send(self.commit_digest).await?;
+    pub async fn commit<R>(mut self, user_data: R) -> Result<TransactionOutcome<R>> {
+        debug!("transaction {} will be committed", self.id);
+        let res = self
+            .client
+            .commit_transaction(
+                &self.pooled_session.session_token(),
+                self.id.clone(),
+                self.commit_digest.bytes(),
+            )
+            .await;
+
+        // If we get a successful commit, check some invariants. Otherwise, the
+        // error must be handled by the caller. In most cases, this should be
+        // the driver which may retry the transaction.
+        if let Ok(ref api) = res {
+            if let Some(ref id) = api.transaction_id {
+                if id != &self.id {
+                    Err(QldbError::IllegalState(format!(
+                        "transaction {} response returned a different id: {:#?}",
+                        self.id, api,
+                    )))?
+                }
+            }
+
+            if let Some(ref bytes) = api.commit_digest {
+                if bytes != &self.commit_digest.bytes() {
+                    Err(QldbError::IllegalState(format!(
+                        "transaction {} response returned a different commit digest: {:#?}",
+                        self.id, api,
+                    )))?
+                }
+            }
+
+            self.execution_stats.accumulate(api);
+        }
+
+        let response = res.map(|_| user_data);
 
         Ok(TransactionOutcome {
-            tx_id: self.id,
             disposition: TransactionDisposition::Commit,
-            execution_stats: self.execution_stats,
-            user_data,
+            response,
         })
     }
 
-    pub async fn abort<R>(self, user_data: R) -> Result<TransactionOutcome<R>> {
+    // FIXME: there are two issues with this API
+    // 1. we really don't want to encourage returning data that didn't pass OCC
+    // 2. it requires the user to match the R type of their commit
+    pub async fn abort<R>(mut self, user_data: R) -> Result<TransactionOutcome<R>> {
+        debug!("transaction {} will be aborted", self.id);
+        match self
+            .client
+            .abort_transaction(&self.pooled_session.session_token())
+            .await
+        {
+            Ok(r) => self.execution_stats.accumulate(&r),
+            Err(e) => {
+                debug!("ignoring failure to abort tx {}: {}", self.id, e);
+                self.pooled_session.notify_invalid();
+            }
+        };
+
         Ok(TransactionOutcome {
-            tx_id: self.id,
             disposition: TransactionDisposition::Abort,
-            execution_stats: self.execution_stats,
-            user_data,
+            response: Ok(user_data),
         })
     }
 }

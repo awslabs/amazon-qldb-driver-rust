@@ -1,4 +1,7 @@
-use std::fmt::Debug;
+use std::{
+    fmt::Debug,
+    sync::{Arc, Mutex},
+};
 
 use crate::api::{QldbSessionApi, SessionToken};
 use crate::QldbError;
@@ -39,14 +42,32 @@ impl ErrorSink<QldbError> for QldbErrorLoggingErrorSink {
 ///
 /// [`discard`] should be set to true if an API response ever indicates the
 /// session is broken.
+#[derive(Clone)]
 pub struct QldbHttp1Connection {
-    pub token: SessionToken,
+    pub(crate) inner: Arc<Mutex<QldbHttp1ConnectionInner>>,
+}
+
+pub(crate) struct QldbHttp1ConnectionInner {
+    pub(crate) token: SessionToken,
     discard: bool,
 }
 
 impl QldbHttp1Connection {
     pub fn notify_invalid(&mut self) {
-        self.discard = true;
+        if let Ok(mut g) = self.inner.lock() {
+            g.discard = true;
+        }
+    }
+
+    pub fn session_token(&self) -> SessionToken {
+        if let Ok(g) = self.inner.lock() {
+            g.token.clone()
+        } else {
+            // there is no code that can panic while holding the lock, so it
+            // seems unreasonable to force the caller of this code to deal with
+            // that case.
+            unreachable!()
+        }
     }
 }
 
@@ -61,8 +82,10 @@ where
     async fn connect(&self) -> Result<Self::Connection, Self::Error> {
         let token = self.client.start_session(self.ledger_name.clone()).await?;
         Ok(QldbHttp1Connection {
-            token,
-            discard: false,
+            inner: Arc::new(Mutex::new(QldbHttp1ConnectionInner {
+                token,
+                discard: false,
+            })),
         })
     }
 
@@ -74,6 +97,10 @@ where
     }
 
     fn has_broken(&self, conn: &mut Self::Connection) -> bool {
-        conn.discard
+        if let Ok(g) = conn.inner.lock() {
+            g.discard
+        } else {
+            true
+        }
     }
 }
