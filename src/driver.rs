@@ -1,6 +1,6 @@
 use crate::rusoto_ext::*;
 use crate::transaction::{TransactionAttempt, TransactionDisposition, TransactionOutcome};
-use crate::{api::QldbSessionApi, pool::QldbErrorLoggingErrorSink};
+use crate::{pool::QldbErrorLoggingErrorSink};
 use crate::{
     pool::QldbSessionManager, retry::default_retry_policy, retry::TransactionRetryPolicy, QldbError,
 };
@@ -287,79 +287,62 @@ where
             attempt_number += 1;
 
             let mut pooled_session = self.session_pool.get().await?;
-            let session_token = &pooled_session.token;
 
-            let (tx, mut receiver) =
-                match TransactionAttempt::start(self.client.clone(), session_token.clone()).await {
-                    Ok(tx) => tx,
-                    Err(qldb_err) => {
-                        if let QldbError::Rusoto(RusotoError::Service(
-                            SendCommandError::BadRequest(message),
-                        )) = qldb_err
-                        {
-                            debug!(
+            let tx = match TransactionAttempt::start(self.client.clone(), pooled_session.clone())
+                .await
+            {
+                Ok(tx) => tx,
+                Err(qldb_err) => {
+                    if let QldbError::Rusoto(RusotoError::Service(SendCommandError::BadRequest(
+                        message,
+                    ))) = qldb_err
+                    {
+                        debug!(
                             "unable to start a transaction on session {} (will be discarded): {}",
-                            session_token, message
+                            pooled_session.session_token(),
+                            message
                         );
-                            pooled_session.notify_invalid();
-                        }
-
-                        // FIXME: Include some sort of sleep and attempt cap.
-                        continue;
+                        pooled_session.notify_invalid();
                     }
-                };
+
+                    // FIXME: Include some sort of sleep and attempt cap.
+                    continue;
+                }
+            };
             let tx_id = tx.id.clone();
 
-            // Run the user's transaction. They can run methods on [`Transaction`] such as [`execute_statement`]. When this future completes, one of 4 things could have happened:
+            // Run the user's transaction. They can run methods on
+            // [`Transaction`] such as [`execute_statement`]. When this future
+            // completes, one of 4 things could have happened:
             //
-            // 1. The user code ended with `tx.commit(R)`. This means we get instructions back to attempt a commit. If the commit succeeds, the user gets their data.
+            // 1. The user code ended with `tx.commit(R)`. This means we get
+            // instructions back to attempt a commit. If the commit succeeds,
+            // the user gets their data.
             // 2. The user code ended with `tx.abort(R)`. Similar story, but we attempt to abort. Even if the abort fails, the user gets their data back.
             // 3. The user code returned an `Err`:
             //    a. If it is a QldbError that is retriable (e.g. consider a communications failure), then the transaction is retried.
             //    b. Otherwise, we return the error to the user.
             let result = match transaction(tx).await {
                 Ok(a) => {
-                    let mut execution_stats = a.execution_stats.clone();
-
-                    // This should never happen, but because we move the Transaction into the closure, we need to assert the user returns a `TransactionAttempt` for that same transaction!
-                    if a.tx_id != tx_id {
-                        return Err(QldbError::UsageError(format!("the call to transact passed your code a Transaction with id {} but you returned instructions for Transaction with id {}", tx_id, a.tx_id)))?;
-                    }
-
                     match a.disposition {
                         TransactionDisposition::Abort => {
-                            debug!("transaction {} will be aborted", a.tx_id);
-
-                            // If a user calls abort and the API request fails, simply ignore the failure. There are a couple of reasons for this choice.
-                            //
-                            // First off, failure is inevitable. There may be communication failure (e.g. WiFi is spotty), API failure (e.g. request throttling) or usage failure
-                            // (e.g. session or transaction has timed out). It may be that the transaction is already aborted, or eventually will be due to server-side timeouts.
-                            //
-                            // Next, safety. It is possible that a failure to abort the transaction here may lead to a problem with the next transaction. For example, consider a network
-                            // error such that the server doesn't receive the abort (transaction is still open server-side). When the session is re-used, the next StartTransaction request
-                            // might fail ("transaction already open"). This is not a safety issue, but it will cause user-level failures as BadRequests are typically not retried.
-                            //
-                            // So, we take the pragmatic approach and mark the session as invalid. This prevents it being returned to the pool.
-                            match self.client.abort_transaction(session_token).await {
-                                Ok(r) => {
-                                    execution_stats.accumulate(&r);
-                                }
-                                Err(e) => {
-                                    debug!("ignoring failure to abort tx {}: {}", a.tx_id, e);
-                                    pooled_session.notify_invalid();
-                                }
+                            // If a user calls abort, they will get
+                            // `Ok(user_data)` returned. This does not allow a
+                            // disambiguation between data that was committed
+                            // (verified by OCC) versus data that was captured
+                            // in an aborted transaction. Consider an
+                            // alternative API where the Result Ok variant is an
+                            // Enum with either `Committed(data)` or
+                            // `Uncommitted(data)`. More clear, but also much
+                            // more annoying to work with. Because this API is
+                            // generic over `R`, we leave the commit/abort
+                            // wrapping up to users.
+                            return match a.response {
+                                Ok(user_data) => Ok(user_data),
+                                Err(e) => Err(e)?,
                             };
-
-                            // If a user calls abort, they will get `Ok(user_data)` returned. This does not allow a disambiguation between data that was committed (verified by OCC) versus
-                            // data that was captured in an aborted transaction. Consider an alternative API where the Result Ok variant is an Enum with either `Committed(data)` or
-                            // `Uncommitted(data)`. More clear, but also much more annoying to work with. Because this API is generic over `R`, we leave the commit/abort wrapping up to
-                            // users.
-                            return Ok(a.user_data); // TODO: return stats
                         }
-                        TransactionDisposition::Commit => {
-                            debug!("transaction {} will be committed", a.tx_id);
-                            Ok(a.user_data)
-                        }
+                        TransactionDisposition::Commit => a.response,
                     }
                 }
                 Err(e) => {
@@ -367,11 +350,16 @@ where
 
                     match e.downcast::<QldbError>() {
                         Ok(qldb_err) => {
-                            // This error will flow through the next match statement to the error handling block at the bottom. It would be cleaner to extract and call and error handler
-                            // here, but that function lands up capturing so many variables it's not worth it.
+                            // This error will flow through the next match
+                            // statement to the error handling block at the
+                            // bottom. It would be cleaner to extract and call
+                            // and error handler here, but that function lands
+                            // up capturing so many variables it's not worth it.
                             Err(qldb_err)
                         }
-                        // This branch means the transaction block failed with a non-QldbError. This means something unrelated to QLDB went wrong.
+                        // This branch means the transaction block failed with a
+                        // non-QldbError. This means something unrelated to QLDB
+                        // went wrong.
                         Err(other) => {
                             return Err(other);
                         }
@@ -379,34 +367,9 @@ where
                 }
             };
 
-            // There are two possibilities at this point in the code. Either the block of code `transaction` ended with [`Transaction.ok`] or a [`QldbError`] was encountered. The other cases
-            // are already handled:
-            //
-            // 1. [`Transaction.abort`] will have returned the data
-            // 2. Another disposition will be compile-fail
-            // 3. Another error will return the `Err` to the user
-            //
-            // So all that's left to do is commit (for the `ok` case) and then go into error handling (for the QldbError case OR if the commit fails).
-            let attempt = match result {
-                Ok(user_data) => {
-                    // TODO: Assert the digest is for this transaction. Maybe that the channel is closed and also send the tx id with the digest?
-                    match receiver.recv().await {
-                        Some(commit_digest) => self
-                            .client
-                            .commit_transaction(session_token, tx_id.clone(), commit_digest.bytes())
-                            .await
-                            .and_then(|_| Ok(user_data)),
-                        None => {
-                            return Err(QldbError::IllegalState(format!("Attempting to commit transaction {} but the channel holding the commit digest was closed", tx_id)))?;
-                        }
-                    }
-                }
-                _ => result,
-            };
-
             // At this point, `attempt` is either `Ok(R)` (in which case we return it to the user - this is a successful commit), or it is an error. The error may have come before or after
             // the attempt to commit. Either way, we need to figure out if the session should be marked invalid and/or if we should retry from the top.
-            match attempt {
+            match result {
                 Ok(user_data) => return Ok(user_data),
                 Err(e) => {
                     // Note: This catch block is after the attempt to commit. We also have to call `notify_valid` before this attempt for the case where one of the commands send during
