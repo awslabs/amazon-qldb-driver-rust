@@ -245,7 +245,7 @@ where
     ///     let (a, b) = driver.transact(|mut tx| async {
     ///         let a = tx.execute_statement("SELECT 1").await?;
     ///         let b = tx.execute_statement("SELECT 2").await?;
-    ///         tx.ok((a, b)).await
+    ///         tx.commit((a, b)).await
     ///     }).await?;
     ///
     ///     Ok(())
@@ -268,7 +268,7 @@ where
     ///     let mut string = String::new();
     ///     driver.transact(|tx| async {
     ///        string.push('1');
-    ///        tx.ok(()).await
+    ///        tx.commit(()).await
     ///     }).await?;
     /// #
     /// #   Ok(())
@@ -312,7 +312,7 @@ where
 
             // Run the user's transaction. They can run methods on [`Transaction`] such as [`execute_statement`]. When this future completes, one of 4 things could have happened:
             //
-            // 1. The user code ended with `tx.ok(R)`. This means we get instructions back to attempt a commit. If the commit succeeds, the user gets their data.
+            // 1. The user code ended with `tx.commit(R)`. This means we get instructions back to attempt a commit. If the commit succeeds, the user gets their data.
             // 2. The user code ended with `tx.abort(R)`. Similar story, but we attempt to abort. Even if the abort fails, the user gets their data back.
             // 3. The user code returned an `Err`:
             //    a. If it is a QldbError that is retriable (e.g. consider a communications failure), then the transaction is retried.
@@ -506,12 +506,12 @@ mod tests {
 
         let fut_1 = spawn({
             let driver = driver.clone();
-            async move { driver.transact(|tx| async { tx.ok(()).await }).await }
+            async move { driver.transact(|tx| async { tx.commit(()).await }).await }
         });
 
         let fut_2 = spawn({
             let driver = driver.clone();
-            async move { driver.transact(|tx| async { tx.ok(()).await }).await }
+            async move { driver.transact(|tx| async { tx.commit(()).await }).await }
         });
 
         fut_1.await??;

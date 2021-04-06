@@ -162,7 +162,7 @@ where
 
     #[deprecated(note = "Please use commit instead")]
     pub async fn ok<R>(self, user_data: R) -> Result<TransactionOutcome<R>> {
-        self.commit(user_data)
+        self.commit(user_data).await
     }
 
     pub async fn commit<R>(self, user_data: R) -> Result<TransactionOutcome<R>> {

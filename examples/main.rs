@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .execute_statement("select value 42 from information_schema.user_tables")
                 .await?;
 
-            tx.ok(results).await
+            tx.commit(results).await
         })
         .await?;
     info!("Tx 1 returned {} result(s):", results.len());
