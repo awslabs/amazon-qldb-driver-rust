@@ -1,21 +1,21 @@
 use crate::rusoto_ext::*;
-use crate::transaction::{TransactionAttempt, TransactionDisposition, TransactionOutcome};
-use crate::{pool::QldbErrorLoggingErrorSink};
+use crate::transaction::TransactionAttempt;
+use crate::{pool::QldbErrorLoggingErrorSink, transaction::TransactionAttemptResult};
 use crate::{
     pool::QldbSessionManager, retry::default_retry_policy, retry::TransactionRetryPolicy, QldbError,
 };
 use anyhow::Result;
 use bb8::Pool;
-use runtime::Runtime;
 use rusoto_core::{
     credential::{DefaultCredentialsProvider, ProvideAwsCredentials},
     Client, HttpClient, Region, RusotoError,
 };
 use rusoto_qldb_session::*;
+use std::future::Future;
 use std::sync::Arc;
-use std::{cell::RefCell, future::Future};
+use thiserror::Error;
+use tokio::sync::Mutex;
 use tokio::time::sleep;
-use tokio::{runtime, sync::Mutex};
 
 /// A builder to help you customize a [`QldbDriver`].
 ///
@@ -209,6 +209,15 @@ where
     transaction_retry_policy: Arc<Mutex<Box<dyn TransactionRetryPolicy + Send + Sync>>>,
 }
 
+#[derive(Error, Debug)]
+pub enum TransactionError {
+    #[error("transaction was aborted")]
+    Aborted,
+
+    #[error("transaction failed after {attempts} attempts, last error: {last_err}")]
+    MaxAttempts { last_err: QldbError, attempts: u32 },
+}
+
 impl<C> QldbDriver<C>
 where
     C: QldbSession + Send + Sync + Clone,
@@ -278,7 +287,7 @@ where
     /// Again, this is because `transaction` is `Fn` not `FnMut` and thus is not allowed to mutate `string`.
     pub async fn transact<F, Fut, R>(&self, transaction: F) -> Result<R>
     where
-        Fut: Future<Output = Result<TransactionOutcome<R>>>,
+        Fut: Future<Output = Result<TransactionAttemptResult<R>>>,
         F: Fn(TransactionAttempt<C>) -> Fut,
     {
         let mut attempt_number = 0u32;
@@ -317,34 +326,19 @@ where
             //
             // 1. The user code ended with `tx.commit(R)`. This means we get
             // instructions back to attempt a commit. If the commit succeeds,
-            // the user gets their data.
-            // 2. The user code ended with `tx.abort(R)`. Similar story, but we attempt to abort. Even if the abort fails, the user gets their data back.
+            // the user gets their data and we're done.
+            //
+            // 2. The user code ended with `tx.abort(R)`. We're done, regardless
+            // of whether the API request to `abort` succeeded.
+            //
             // 3. The user code returned an `Err`:
-            //    a. If it is a QldbError that is retriable (e.g. consider a communications failure), then the transaction is retried.
-            //    b. Otherwise, we return the error to the user.
-            let result = match transaction(tx).await {
-                Ok(a) => {
-                    match a.disposition {
-                        TransactionDisposition::Abort => {
-                            // If a user calls abort, they will get
-                            // `Ok(user_data)` returned. This does not allow a
-                            // disambiguation between data that was committed
-                            // (verified by OCC) versus data that was captured
-                            // in an aborted transaction. Consider an
-                            // alternative API where the Result Ok variant is an
-                            // Enum with either `Committed(data)` or
-                            // `Uncommitted(data)`. More clear, but also much
-                            // more annoying to work with. Because this API is
-                            // generic over `R`, we leave the commit/abort
-                            // wrapping up to users.
-                            return match a.response {
-                                Ok(user_data) => Ok(user_data),
-                                Err(e) => Err(e)?,
-                            };
-                        }
-                        TransactionDisposition::Commit => a.response,
-                    }
-                }
+            //    a. If it is a QldbError that is retriable (e.g. consider a
+            //    communications failure), then the transaction is retried.
+            //    b. Otherwise, we return the error to the user. Arbitrary
+            //    application types are *not* retried.
+            let qldb_err = match transaction(tx).await {
+                Ok(TransactionAttemptResult::Committed { user_data, .. }) => return Ok(user_data),
+                Ok(TransactionAttemptResult::Aborted) => Err(TransactionError::Aborted)?,
                 Err(e) => {
                     debug!("transaction {} failed with error: {}", tx_id, e);
 
@@ -355,7 +349,7 @@ where
                             // bottom. It would be cleaner to extract and call
                             // and error handler here, but that function lands
                             // up capturing so many variables it's not worth it.
-                            Err(qldb_err)
+                            qldb_err
                         }
                         // This branch means the transaction block failed with a
                         // non-QldbError. This means something unrelated to QLDB
@@ -367,85 +361,40 @@ where
                 }
             };
 
-            // At this point, `attempt` is either `Ok(R)` (in which case we return it to the user - this is a successful commit), or it is an error. The error may have come before or after
-            // the attempt to commit. Either way, we need to figure out if the session should be marked invalid and/or if we should retry from the top.
-            match result {
-                Ok(user_data) => return Ok(user_data),
-                Err(e) => {
-                    // Note: This catch block is after the attempt to commit. We also have to call `notify_valid` before this attempt for the case where one of the commands send during
-                    // execution of the user code ran into the ISE. Also note that we should not even attempt to commit if the previous error was an ISE! Currently this is taken care of by
-                    // not retrying at all (when user code fails; we only retry on OCC during commit).
-                    if let QldbError::Rusoto(RusotoError::Service(
-                        SendCommandError::InvalidSession(_),
-                    )) = e
-                    {
-                        pooled_session.notify_invalid();
-                    }
+            if let QldbError::Rusoto(RusotoError::Service(SendCommandError::InvalidSession(_))) =
+                qldb_err
+            {
+                pooled_session.notify_invalid();
+            }
 
-                    let retry_ins = {
-                        let policy = self.transaction_retry_policy.lock().await;
-                        policy.on_err(&e, attempt_number)
-                    };
+            let retry_ins = {
+                let policy = self.transaction_retry_policy.lock().await;
+                policy.on_err(&qldb_err, attempt_number)
+            };
 
-                    if retry_ins.should_retry {
-                        debug!(
-                            "Error comitting ({}) on attempt {}, will retry",
-                            e, attempt_number
-                        );
-                        if let Some(duration) = retry_ins.delay {
-                            debug!("Retry will be delayed by {} millis", duration.as_millis());
-                            sleep(duration).await;
-                        }
-                    } else {
-                        debug!(
-                            "Not retrying after {} attempts due to error: {}",
-                            attempt_number, e
-                        );
-
-                        return Err(e)?;
-                    }
+            if retry_ins.should_retry {
+                debug!(
+                    "Error comitting ({}) on attempt {}, will retry",
+                    qldb_err, attempt_number
+                );
+                if let Some(duration) = retry_ins.delay {
+                    debug!("Retry will be delayed by {} millis", duration.as_millis());
+                    sleep(duration).await;
                 }
+            } else {
+                debug!(
+                    "Not retrying after {} attempts due to error: {}",
+                    attempt_number, qldb_err
+                );
+
+                return Err(TransactionError::MaxAttempts {
+                    last_err: qldb_err,
+                    attempts: attempt_number,
+                })?;
             }
 
             // Here we retry. We're in a loop, remember!
         }
-    }
-
-    pub fn into_blocking(self) -> Result<BlockingQldbDriver<C>> {
-        BlockingQldbDriver::new(self)
-    }
-}
-
-pub struct BlockingQldbDriver<C>
-where
-    C: QldbSession + Send + Sync + Clone + 'static,
-{
-    async_driver: QldbDriver<C>,
-    runtime: RefCell<Runtime>,
-}
-
-impl<C> BlockingQldbDriver<C>
-where
-    C: QldbSession + Send + Sync + Clone,
-{
-    fn new(async_driver: QldbDriver<C>) -> Result<BlockingQldbDriver<C>> {
-        let runtime = runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        Ok(BlockingQldbDriver {
-            async_driver,
-            runtime: RefCell::new(runtime),
-        })
-    }
-
-    pub fn transact<F, Fut, R>(&self, transaction: F) -> Result<R>
-    where
-        Fut: Future<Output = Result<TransactionOutcome<R>>>,
-        F: Fn(TransactionAttempt<C>) -> Fut,
-    {
-        let runtime = self.runtime.borrow();
-        let fun = &transaction;
-        runtime.block_on(async move { self.async_driver.transact(fun).await })
     }
 }
 
@@ -479,6 +428,37 @@ mod tests {
 
         fut_1.await??;
         fut_2.await??;
+
+        Ok(())
+    }
+
+    // This test shows how to call abort. There are very reasons to call abort
+    // in QLDB as nearly all transactions *should* go through a `commit` to
+    // ensure the returned data was not concurrently modified.
+    #[tokio::test]
+    async fn abort_usage() -> Result<()> {
+        // this driver will be used concurrently.
+        let mock = TestQldbSessionClient::new();
+        let driver = QldbDriverBuilder::new()
+            .ledger_name("abort_usage")
+            .build_with_client(mock.clone())?;
+
+        let result = driver
+            .transact(|tx| async {
+                if 1 > 2 {
+                    tx.commit(42).await
+                } else {
+                    tx.abort().await
+                }
+            })
+            .await;
+
+        let err = result.unwrap_err();
+        if let Ok(TransactionError::Aborted) = err.downcast::<TransactionError>() {
+            // expected
+        } else {
+            panic!("expected an aborted error");
+        }
 
         Ok(())
     }

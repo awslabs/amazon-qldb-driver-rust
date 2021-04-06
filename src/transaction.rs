@@ -48,14 +48,12 @@ impl StatementResults {
     }
 }
 
-pub enum TransactionDisposition {
-    Commit,
-    Abort,
-}
-
-pub struct TransactionOutcome<R> {
-    pub(crate) disposition: TransactionDisposition,
-    pub(crate) response: Result<R, QldbError>,
+pub enum TransactionAttemptResult<R> {
+    Committed {
+        commit_execution_stats: ExecutionStats,
+        user_data: R,
+    },
+    Aborted,
 }
 
 pub struct TransactionAttempt<C: QldbSessionApi + Send> {
@@ -63,7 +61,14 @@ pub struct TransactionAttempt<C: QldbSessionApi + Send> {
     pooled_session: QldbHttp1Connection,
     pub id: TransactionId,
     commit_digest: QldbHash,
-    execution_stats: ExecutionStats,
+    /// Accumulates stats for this transaction attempt. Repeated calls of this
+    /// method may return different results if additional API calls were made.
+    /// The stats will include the timing and IO usage for the start and commit
+    /// API calls too.
+    ///
+    /// If you call this method at the start of a transaction, that will include
+    /// the timing information of the start transaction call!
+    pub accumulated_execution_stats: ExecutionStats,
 }
 
 impl<C> TransactionAttempt<C>
@@ -74,11 +79,11 @@ where
         client: C,
         pooled_session: QldbHttp1Connection,
     ) -> Result<TransactionAttempt<C>, QldbError> {
-        let mut execution_stats = ExecutionStats::default();
+        let mut accumulated_execution_stats = ExecutionStats::default();
         let start_result = client
             .start_transaction(&pooled_session.session_token())
             .await?;
-        execution_stats.accumulate(&start_result);
+        accumulated_execution_stats.accumulate(&start_result);
         let id = start_result
             .transaction_id
             .ok_or(QldbError::UnexpectedResponse(
@@ -92,7 +97,7 @@ where
             pooled_session,
             id,
             commit_digest,
-            execution_stats,
+            accumulated_execution_stats,
         };
         Ok(transaction)
     }
@@ -160,16 +165,12 @@ where
             }
         }
 
-        self.execution_stats.accumulate(&execution_stats);
+        self.accumulated_execution_stats
+            .accumulate(&execution_stats);
         Ok(StatementResults::new(values, execution_stats))
     }
 
-    #[deprecated(note = "Please use commit instead")]
-    pub async fn ok<R>(self, user_data: R) -> Result<TransactionOutcome<R>> {
-        self.commit(user_data).await
-    }
-
-    pub async fn commit<R>(mut self, user_data: R) -> Result<TransactionOutcome<R>> {
+    pub async fn commit<R>(mut self, user_data: R) -> Result<TransactionAttemptResult<R>> {
         debug!("transaction {} will be committed", self.id);
         let res = self
             .client
@@ -178,61 +179,53 @@ where
                 self.id.clone(),
                 self.commit_digest.bytes(),
             )
-            .await;
+            .await?;
 
         // If we get a successful commit, check some invariants. Otherwise, the
         // error must be handled by the caller. In most cases, this should be
         // the driver which may retry the transaction.
-        if let Ok(ref api) = res {
-            if let Some(ref id) = api.transaction_id {
-                if id != &self.id {
-                    Err(QldbError::IllegalState(format!(
-                        "transaction {} response returned a different id: {:#?}",
-                        self.id, api,
-                    )))?
-                }
+        if let Some(ref id) = res.transaction_id {
+            if id != &self.id {
+                Err(QldbError::IllegalState(format!(
+                    "transaction {} response returned a different id: {:#?}",
+                    self.id, res,
+                )))?
             }
-
-            if let Some(ref bytes) = api.commit_digest {
-                if bytes != &self.commit_digest.bytes() {
-                    Err(QldbError::IllegalState(format!(
-                        "transaction {} response returned a different commit digest: {:#?}",
-                        self.id, api,
-                    )))?
-                }
-            }
-
-            self.execution_stats.accumulate(api);
         }
 
-        let response = res.map(|_| user_data);
+        if let Some(ref bytes) = res.commit_digest {
+            if bytes != &self.commit_digest.bytes() {
+                Err(QldbError::IllegalState(format!(
+                    "transaction {} response returned a different commit digest: {:#?}",
+                    self.id, res,
+                )))?
+            }
+        }
 
-        Ok(TransactionOutcome {
-            disposition: TransactionDisposition::Commit,
-            response,
+        self.accumulated_execution_stats.accumulate(&res);
+
+        Ok(TransactionAttemptResult::Committed {
+            commit_execution_stats: ExecutionStats::from_api(res),
+            user_data,
         })
     }
 
-    // FIXME: there are two issues with this API
-    // 1. we really don't want to encourage returning data that didn't pass OCC
-    // 2. it requires the user to match the R type of their commit
-    pub async fn abort<R>(mut self, user_data: R) -> Result<TransactionOutcome<R>> {
+    // Always returns `Ok` even though the signature says `Result`. This is to
+    // keep the type consistent with `commit`.
+    pub async fn abort<R>(mut self) -> Result<TransactionAttemptResult<R>> {
         debug!("transaction {} will be aborted", self.id);
         match self
             .client
             .abort_transaction(&self.pooled_session.session_token())
             .await
         {
-            Ok(r) => self.execution_stats.accumulate(&r),
+            Ok(r) => self.accumulated_execution_stats.accumulate(&r),
             Err(e) => {
                 debug!("ignoring failure to abort tx {}: {}", self.id, e);
                 self.pooled_session.notify_invalid();
             }
         };
 
-        Ok(TransactionOutcome {
-            disposition: TransactionDisposition::Abort,
-            response: Ok(user_data),
-        })
+        Ok(TransactionAttemptResult::Aborted)
     }
 }
