@@ -16,7 +16,7 @@ pub mod retry;
 pub mod rusoto_ext;
 pub mod transaction;
 
-pub use crate::driver::{BlockingQldbDriver, QldbDriver, QldbDriverBuilder};
+pub use crate::driver::{QldbDriver, QldbDriverBuilder};
 
 #[derive(Error, Debug)]
 pub enum QldbError {

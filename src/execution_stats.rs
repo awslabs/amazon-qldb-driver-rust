@@ -117,6 +117,19 @@ pub trait HasExecutionStats {
     fn io_usage(&self) -> Option<IOUsage>;
 }
 
+impl ExecutionStats {
+    // Can't use From here because it conflicts with the stdlib.
+    pub(crate) fn from_api<S>(s: S) -> ExecutionStats
+    where
+        S: HasExecutionStats,
+    {
+        ExecutionStats {
+            timing_information: s.timing_information(),
+            io_usage: s.io_usage().unwrap_or(IOUsage::default()),
+        }
+    }
+}
+
 impl HasExecutionStats for ExecutionStats {
     fn timing_information(&self) -> TimingInformation {
         self.timing_information.clone()
