@@ -297,6 +297,10 @@ where
 
             let mut pooled_session = self.session_pool.get().await?;
 
+            // FIXME: We should refactor the pool abstraction so that it *has*
+            // the client and if *any* usage of the API results in an invalid
+            // session exception, then said session is discarded. That will
+            // eliminate careful exception checking like the one you see here.
             let tx = match TransactionAttempt::start(self.client.clone(), pooled_session.clone())
                 .await
             {
