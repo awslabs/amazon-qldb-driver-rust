@@ -93,7 +93,7 @@ async fn main() -> Result<()> {
 
     // Figure out which task won the race. There should never be more than 1
     // winner, but it's OK to have 0 winners if the table wasn't empty to begin
-    // win!
+    // with!
     //
     // What you may find when running this example is that task 0 wins more
     // often than not. The reason for that is it gets a head-start! It's the
