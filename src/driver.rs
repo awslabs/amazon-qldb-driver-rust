@@ -11,8 +11,8 @@ use rusoto_core::{
     Client, HttpClient, Region,
 };
 use rusoto_qldb_session::*;
-use std::future::Future;
 use std::sync::Arc;
+use std::{future::Future, time::Duration};
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
@@ -31,13 +31,16 @@ use tokio::time::sleep;
 /// # use amazon_qldb_driver::QldbDriverBuilder;
 /// # use rusoto_core::region::Region;
 /// # use rusoto_qldb_session::QldbSessionClient;
+/// # use tokio;
 /// #
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let client = QldbSessionClient::new(Region::UsWest2);
 /// let driver = QldbDriverBuilder::new()
 ///     .ledger_name("sample-ledger")
 ///     .region(Region::UsEast1)
-///     .build()?;
+///     .build()
+///     .await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -106,7 +109,7 @@ impl QldbDriverBuilder {
     // just so we can avoid the partial move of self here (into
     // build_with_client). Suggestion: refactor the builder to cleanly separate
     // out the client builder.
-    pub fn build(mut self) -> Result<QldbDriver<QldbSessionClient>> {
+    pub async fn build(mut self) -> Result<QldbDriver<QldbSessionClient>> {
         let client = Client::new_with(
             self.credentials_provider.take().unwrap(),
             default_dispatcher()?,
@@ -116,10 +119,10 @@ impl QldbDriverBuilder {
             None => Region::default(),
         };
         let qldb_client = QldbSessionClient::new_with_client(client, region);
-        self.build_with_client(qldb_client)
+        self.build_with_client(qldb_client).await
     }
 
-    pub fn build_with_client<C>(self, client: C) -> Result<QldbDriver<C>>
+    pub async fn build_with_client<C>(self, client: C) -> Result<QldbDriver<C>>
     where
         C: QldbSession + Send + Sync + Clone + 'static,
     {
@@ -129,18 +132,26 @@ impl QldbDriverBuilder {
 
         let transaction_retry_policy = Arc::new(Mutex::new(self.transaction_retry_policy));
 
-        // bb8's [build_unchecked] method doesn't establish initial connections,
-        // which is what we want. The '_unchecked' bit might sound scary, but it
-        // (no eager-connect) is actually what we want!
+        // Note 1: by setting min_idle to 1 we ensure that this method will
+        // return an `Err` if not even 1 connection could be established. This
+        // catches things like invalid credentials or other misconfiguration. In
+        // particular, `build` will return the error of the underlying
+        // connection failure whilst later uses of the bb8 pool would simply
+        // timeout in the attempt to get a connection.
+        //
+        // FIXME: Decide how much of the pool configuration to expose.
         let session_pool = Pool::builder()
             .test_on_check_out(false)
             .max_lifetime(None)
+            .min_idle(Some(1)) // see [1]
             .max_size(self.max_concurrent_transactions)
+            .connection_timeout(Duration::from_secs(10))
             .error_sink(Box::new(QldbErrorLoggingErrorSink::new()))
-            .build_unchecked(QldbSessionManager {
+            .build(QldbSessionManager {
                 client: client.clone(),
                 ledger_name: ledger_name.clone(),
-            });
+            })
+            .await?;
 
         Ok(QldbDriver {
             ledger_name: Arc::new(ledger_name.clone()),
@@ -250,7 +261,10 @@ where
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let driver = QldbDriverBuilder::new().ledger_name("sample-ledger").build()?;
+    ///     let driver = QldbDriverBuilder::new()
+    ///         .ledger_name("sample-ledger")
+    ///         .build()
+    ///         .await?;
     ///     let (a, b) = driver.transact(|mut tx| async {
     ///         let a = tx.execute_statement("SELECT 1").await?;
     ///         let b = tx.execute_statement("SELECT 2").await?;
@@ -395,7 +409,8 @@ mod tests {
         let mock = TestQldbSessionClient::new();
         let driver = QldbDriverBuilder::new()
             .ledger_name("multi_thread_example")
-            .build_with_client(mock.clone())?;
+            .build_with_client(mock.clone())
+            .await?;
 
         let fut_1 = spawn({
             let driver = driver.clone();
@@ -422,7 +437,8 @@ mod tests {
         let mock = TestQldbSessionClient::new();
         let driver = QldbDriverBuilder::new()
             .ledger_name("abort_usage")
-            .build_with_client(mock.clone())?;
+            .build_with_client(mock.clone())
+            .await?;
 
         let result = driver
             .transact(|tx| async {

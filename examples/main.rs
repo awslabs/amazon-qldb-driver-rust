@@ -13,7 +13,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let driver = QldbDriverBuilder::new()
         .ledger_name("sample-ledger")
         .region(Region::UsWest2)
-        .build()?;
+        .build()
+        .await?;
 
     // Usage example 1: Here we use a closure that returns a `Result<R, QldbError>`. The closure is wrapped in ceremony to appease the type system.
     info!("Transaction example 1 now running");
