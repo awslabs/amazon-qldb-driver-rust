@@ -1,6 +1,7 @@
 use rusoto_core::RusotoError;
 use rusoto_qldb_session::*;
 
+use anyhow::Result;
 use thiserror::Error;
 
 #[macro_use]
@@ -17,6 +18,13 @@ pub mod rusoto_ext;
 pub mod transaction;
 
 pub use crate::driver::{QldbDriver, QldbDriverBuilder};
+pub use crate::transaction::{TransactionAttempt, TransactionAttemptResult};
+
+/// An alias for the type returned by calls to [`QldbDriver::transact`]. The
+/// outer `Result` signifies whether the block of code succeeded or not (i.e.
+/// did a `?` cause early return). The inner type is the outcome of the
+/// transaction: whether or not it was committed or aborted.
+pub type TransactionResult<R> = Result<TransactionAttemptResult<R>>;
 
 #[derive(Error, Debug)]
 pub enum QldbError {
