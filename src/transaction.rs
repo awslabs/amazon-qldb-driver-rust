@@ -9,6 +9,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use ion_c_sys::reader::IonCReaderHandle;
 use ion_c_sys::result::IonCError;
+use rusoto_qldb_session::QldbSession;
 use std::convert::TryFrom;
 
 /// The results of executing a statement.
@@ -56,9 +57,11 @@ pub enum TransactionAttemptResult<R> {
     Aborted,
 }
 
-pub struct TransactionAttempt<C: QldbSessionApi + Send> {
-    client: C,
-    pooled_session: QldbHttp1Connection,
+pub struct TransactionAttempt<C>
+where
+    C: QldbSession + Send + Sync + Clone,
+{
+    pooled_session: QldbHttp1Connection<C>,
     pub id: TransactionId,
     commit_digest: QldbHash,
     /// Accumulates stats for this transaction attempt. Repeated calls of this
@@ -73,14 +76,13 @@ pub struct TransactionAttempt<C: QldbSessionApi + Send> {
 
 impl<C> TransactionAttempt<C>
 where
-    C: QldbSessionApi + Send,
+    C: QldbSession + Send + Sync + Clone,
 {
     pub(crate) async fn start(
-        client: C,
-        pooled_session: QldbHttp1Connection,
+        pooled_session: QldbHttp1Connection<C>,
     ) -> Result<TransactionAttempt<C>, QldbError> {
         let mut accumulated_execution_stats = ExecutionStats::default();
-        let start_result = client
+        let start_result = pooled_session
             .start_transaction(&pooled_session.session_token())
             .await?;
         accumulated_execution_stats.accumulate(&start_result);
@@ -93,7 +95,6 @@ where
         let seed_hash = ion_hash(&id);
         let commit_digest = QldbHash::from_bytes(seed_hash).unwrap();
         let transaction = TransactionAttempt {
-            client,
             pooled_session,
             id,
             commit_digest,
@@ -114,7 +115,7 @@ where
 
         let mut execution_stats = ExecutionStats::default();
         let execute_result = self
-            .client
+            .pooled_session
             .execute_statement(
                 &self.pooled_session.session_token(),
                 &self.id,
@@ -148,7 +149,7 @@ where
 
                 if let Some(next_page_token) = page.next_page_token {
                     let fetch_page_result = self
-                        .client
+                        .pooled_session
                         .fetch_page(
                             &self.pooled_session.session_token(),
                             &self.id,
@@ -173,7 +174,7 @@ where
     pub async fn commit<R>(mut self, user_data: R) -> Result<TransactionAttemptResult<R>> {
         debug!("transaction {} will be committed", self.id);
         let res = self
-            .client
+            .pooled_session
             .commit_transaction(
                 &self.pooled_session.session_token(),
                 self.id.clone(),
@@ -215,7 +216,7 @@ where
     pub async fn abort<R>(mut self) -> Result<TransactionAttemptResult<R>> {
         debug!("transaction {} will be aborted", self.id);
         match self
-            .client
+            .pooled_session
             .abort_transaction(&self.pooled_session.session_token())
             .await
         {

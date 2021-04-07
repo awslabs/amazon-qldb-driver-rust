@@ -8,7 +8,7 @@ use anyhow::Result;
 use bb8::Pool;
 use rusoto_core::{
     credential::{DefaultCredentialsProvider, ProvideAwsCredentials},
-    Client, HttpClient, Region, RusotoError,
+    Client, HttpClient, Region,
 };
 use rusoto_qldb_session::*;
 use std::future::Future;
@@ -295,30 +295,13 @@ where
         loop {
             attempt_number += 1;
 
-            let mut pooled_session = self.session_pool.get().await?;
+            let pooled_session = self.session_pool.get().await?;
 
-            // FIXME: We should refactor the pool abstraction so that it *has*
-            // the client and if *any* usage of the API results in an invalid
-            // session exception, then said session is discarded. That will
-            // eliminate careful exception checking like the one you see here.
-            let tx = match TransactionAttempt::start(self.client.clone(), pooled_session.clone())
-                .await
-            {
+            let tx = match TransactionAttempt::start(pooled_session.clone()).await {
                 Ok(tx) => tx,
-                Err(qldb_err) => {
-                    if let QldbError::Rusoto(RusotoError::Service(SendCommandError::BadRequest(
-                        message,
-                    ))) = qldb_err
-                    {
-                        debug!(
-                            "unable to start a transaction on session {} (will be discarded): {}",
-                            pooled_session.session_token(),
-                            message
-                        );
-                        pooled_session.notify_invalid();
-                    }
-
+                Err(e) => {
                     // FIXME: Include some sort of sleep and attempt cap.
+                    debug!("unable to start a session, trying again: {}", e);
                     continue;
                 }
             };
@@ -364,12 +347,6 @@ where
                     }
                 }
             };
-
-            if let QldbError::Rusoto(RusotoError::Service(SendCommandError::InvalidSession(_))) =
-                qldb_err
-            {
-                pooled_session.notify_invalid();
-            }
 
             let retry_ins = {
                 let policy = self.transaction_retry_policy.lock().await;
