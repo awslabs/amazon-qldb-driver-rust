@@ -173,6 +173,13 @@ where
                     .await?;
                 tx.commit(true).await
             } else {
+                // Note that we always call commit, even though we're not
+                // inserting the example document here. The `false` argument is
+                // not sent to QLDB. Rather, it becomes the return value of the
+                // `transact` method (bound to the variable `winner`) **only
+                // after the commit succeeds**. In this way, if `winner` is
+                // assigned to, you are guaranteed that your transaction was
+                // serialized with other changes to the ledger.
                 tx.commit(false).await
             }
         })
