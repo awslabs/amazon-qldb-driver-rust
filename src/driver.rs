@@ -344,17 +344,10 @@ where
                     debug!("transaction {} failed with error: {}", tx_id, e);
 
                     match e.downcast::<QldbError>() {
-                        Ok(qldb_err) => {
-                            // This error will flow through the next match
-                            // statement to the error handling block at the
-                            // bottom. It would be cleaner to extract and call
-                            // and error handler here, but that function lands
-                            // up capturing so many variables it's not worth it.
-                            qldb_err
-                        }
+                        Ok(qldb_err) => qldb_err,
                         // This branch means the transaction block failed with a
                         // non-QldbError. This means something unrelated to QLDB
-                        // went wrong.
+                        // went wrong. We don't retry on arbitrary user errors.
                         Err(other) => {
                             return Err(other);
                         }
