@@ -28,7 +28,7 @@ use tokio::{self, spawn};
 /// | 3 | insert           | insert           |
 /// | 4 | commit -> true   | commit -> OCC    |
 ///
-/// In the above example, transaction 1 one the race. However, transaction 2
+/// In the above example, transaction 1 won the race. However, transaction 2
 /// didn't know it was going to lose until the call to commit (step 4) failed!
 // by default, this is a multi-threaded runtime and uses as many threads as you have CPUs
 #[tokio::main]
