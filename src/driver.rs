@@ -132,18 +132,9 @@ impl QldbDriverBuilder {
 
         let transaction_retry_policy = Arc::new(Mutex::new(self.transaction_retry_policy));
 
-        // Note 1: by setting min_idle to 1 we ensure that this method will
-        // return an `Err` if not even 1 connection could be established. This
-        // catches things like invalid credentials or other misconfiguration. In
-        // particular, `build` will return the error of the underlying
-        // connection failure whilst later uses of the bb8 pool would simply
-        // timeout in the attempt to get a connection.
-        //
-        // FIXME: Decide how much of the pool configuration to expose.
         let session_pool = Pool::builder()
             .test_on_check_out(false)
             .max_lifetime(None)
-            .min_idle(Some(1)) // see [1]
             .max_size(self.max_concurrent_transactions)
             .connection_timeout(Duration::from_secs(10))
             .error_sink(Box::new(QldbErrorLoggingErrorSink::new()))
