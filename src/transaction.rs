@@ -38,6 +38,10 @@ impl StatementResults {
         self.values.len()
     }
 
+    pub fn raw_values(&self) -> impl Iterator<Item = &[u8]> {
+        self.values.iter().map(|bytes| bytes.as_ref())
+    }
+
     pub fn readers(&self) -> impl Iterator<Item = Result<IonCReaderHandle, IonCError>> {
         self.values
             .iter()
