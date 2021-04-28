@@ -155,7 +155,7 @@ impl QldbDriverBuilder {
 
 fn default_dispatcher() -> Result<HttpClient> {
     let mut client = HttpClient::new()?;
-    client.local_agent(format!("QLDB Driver for Rust v{}", version()));
+    client.local_agent(format!("QLDB Driver for Rust v{}", crate::version()));
     Ok(client)
 }
 
@@ -215,13 +215,6 @@ pub enum TransactionError {
 
     #[error("transaction failed after {attempts} attempts, last error: {last_err}")]
     MaxAttempts { last_err: QldbError, attempts: u32 },
-}
-
-const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-
-#[inline(always)]
-pub fn version() -> &'static str {
-    VERSION
 }
 
 impl<C> QldbDriver<C>
