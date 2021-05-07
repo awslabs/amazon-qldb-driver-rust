@@ -16,6 +16,7 @@ use std::{future::Future, time::Duration};
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
+use tracing::debug;
 
 /// A builder to help you customize a [`QldbDriver`].
 ///
@@ -303,7 +304,7 @@ where
                 Ok(tx) => tx,
                 Err(e) => {
                     // FIXME: Include some sort of sleep and attempt cap.
-                    debug!("unable to start a session, trying again: {}", e);
+                    debug!(error = %e, "unable to start a session, trying again");
                     continue;
                 }
             };
@@ -329,7 +330,11 @@ where
                 Ok(TransactionAttemptResult::Committed { user_data, .. }) => return Ok(user_data),
                 Ok(TransactionAttemptResult::Aborted) => Err(TransactionError::Aborted)?,
                 Err(e) => {
-                    debug!("transaction {} failed with error: {}", tx_id, e);
+                    debug!(
+                        error = %e,
+                        id = &tx_id[..],
+                        "transaction failed with error"
+                    );
 
                     match e.downcast::<QldbError>() {
                         Ok(qldb_err) => qldb_err,
@@ -350,11 +355,14 @@ where
 
             if retry_ins.should_retry {
                 debug!(
-                    "Error comitting ({}) on attempt {}, will retry",
-                    qldb_err, attempt_number
+                    error = %qldb_err,
+                    attempt_number, "Error comitting, will retry"
                 );
                 if let Some(duration) = retry_ins.delay {
-                    debug!("Retry will be delayed by {} millis", duration.as_millis());
+                    debug!(
+                        delay = duration.as_millis().to_string().as_str(),
+                        "Retry will be delayed"
+                    );
                     sleep(duration).await;
                 }
             } else {

@@ -2,6 +2,7 @@ use crate::QldbError;
 use async_trait::async_trait;
 use bytes::Bytes;
 use rusoto_qldb_session::*;
+use tracing::debug;
 
 pub type SessionToken = String;
 pub type TransactionId = String;
@@ -81,8 +82,9 @@ where
             ..Default::default()
         };
 
-        debug!("request: abort_transaction {:?}", request);
+        debug!(?request, command = "abort_transaction", "request");
         let response = self.send_command(request).await?;
+        debug!(?response);
 
         Ok(response
             .abort_transaction
@@ -106,8 +108,9 @@ where
             ..Default::default()
         };
 
-        debug!("request: commit_transaction {:?}", request);
+        debug!(?request, command = "commit_transaction", "request");
         let response = self.send_command(request).await?;
+        debug!(?response);
 
         let committed = response
             .commit_transaction
@@ -157,8 +160,9 @@ where
             ..Default::default()
         };
 
-        debug!("request: end_session {:?}", request);
+        debug!(?request, command = "end_session", "request");
         let response = self.send_command(request).await?;
+        debug!(?response);
 
         response.end_session.ok_or(QldbError::UnexpectedResponse(
             "EndSession requests should return EndSession responses".into(),
@@ -178,20 +182,23 @@ where
             session_token: Some(session_token.clone()),
             execute_statement: Some(ExecuteStatementRequest {
                 transaction_id: transaction_id.clone(),
-                statement: statement,
+                statement,
                 parameters: None,
             }),
             ..Default::default()
         };
 
-        debug!("request: execute_statement {:?}", request);
-        let response = self.send_command(request).await?.execute_statement.ok_or(
-            QldbError::UnexpectedResponse(
-                "ExecuteTransaction requests should return ExecuteTransaction responses".into(),
-            ),
-        )?;
+        debug!(?request, command = "execute_statement", "request");
+        let response = self.send_command(request).await?;
+        debug!(?response);
 
-        Ok(response)
+        let inner = response
+            .execute_statement
+            .ok_or(QldbError::UnexpectedResponse(
+                "ExecuteTransaction requests should return ExecuteTransaction responses".into(),
+            ))?;
+
+        Ok(inner)
     }
 
     // FIXME: dont eat the page
@@ -204,34 +211,32 @@ where
         let request = SendCommandRequest {
             session_token: Some(session_token.clone()),
             fetch_page: Some(FetchPageRequest {
-                next_page_token: next_page_token,
+                next_page_token,
                 transaction_id: transaction_id.clone(),
             }),
             ..Default::default()
         };
 
-        debug!("request: fetch_page {:?}", request);
-        let response =
-            self.send_command(request)
-                .await?
-                .fetch_page
-                .ok_or(QldbError::UnexpectedResponse(
-                    "FetchPage requests should return FetchPage responses".into(),
-                ))?;
+        debug!(?request, command = "fetch_page", "request");
+        let response = self.send_command(request).await?;
+        debug!(?response);
 
-        Ok(response)
+        let inner = response.fetch_page.ok_or(QldbError::UnexpectedResponse(
+            "FetchPage requests should return FetchPage responses".into(),
+        ))?;
+
+        Ok(inner)
     }
 
     async fn start_session(&self, ledger_name: String) -> Result<SessionToken, QldbError> {
         let request = SendCommandRequest {
-            start_session: Some(StartSessionRequest {
-                ledger_name: ledger_name,
-            }),
+            start_session: Some(StartSessionRequest { ledger_name }),
             ..Default::default()
         };
 
-        debug!("request: start_session {:?}", request);
+        debug!(?request, command = "start_session", "request");
         let response = self.send_command(request).await?;
+        debug!(?response);
 
         response
             .start_session
@@ -254,8 +259,9 @@ where
             ..Default::default()
         };
 
-        debug!("request: start_transaction {:?}", request);
+        debug!(?request, command = "start_transaction", "request");
         let response = self.send_command(request).await?;
+        debug!(?response);
 
         Ok(response
             .start_transaction

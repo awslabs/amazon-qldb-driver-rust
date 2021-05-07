@@ -11,6 +11,7 @@ use ion_c_sys::reader::IonCReaderHandle;
 use ion_c_sys::result::IonCError;
 use rusoto_qldb_session::QldbSession;
 use std::convert::TryFrom;
+use tracing::debug;
 
 /// The results of executing a statement.
 ///
@@ -176,7 +177,7 @@ where
     }
 
     pub async fn commit<R>(mut self, user_data: R) -> Result<TransactionAttemptResult<R>> {
-        debug!("transaction {} will be committed", self.id);
+        debug!(id = &self.id[..], "transaction will be committed");
         let res = self
             .pooled_session
             .commit_transaction(
@@ -218,7 +219,7 @@ where
     // Always returns `Ok` even though the signature says `Result`. This is to
     // keep the type consistent with `commit`.
     pub async fn abort<R>(mut self) -> Result<TransactionAttemptResult<R>> {
-        debug!("transaction {} will be aborted", self.id);
+        debug!(id = &self.id[..], "transaction will be aborted");
         match self
             .pooled_session
             .abort_transaction(&self.pooled_session.session_token())
@@ -226,7 +227,11 @@ where
         {
             Ok(r) => self.accumulated_execution_stats.accumulate(&r),
             Err(e) => {
-                debug!("ignoring failure to abort tx {}: {}", self.id, e);
+                debug!(
+                    error = %e,
+                    id = &self.id[..],
+                    "ignoring failure to abort tx"
+                );
                 self.pooled_session.notify_invalid();
             }
         };

@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use bb8::{ErrorSink, ManageConnection};
 use rusoto_core::RusotoError;
 use rusoto_qldb_session::*;
+use tracing::debug;
 
 pub struct QldbSessionManager<C>
 where
@@ -29,7 +30,7 @@ impl QldbErrorLoggingErrorSink {
 
 impl ErrorSink<QldbError> for QldbErrorLoggingErrorSink {
     fn sink(&self, error: QldbError) {
-        debug!("error in connection pool: {}", error);
+        debug!(error = %error, "error in connection pool");
     }
 
     fn boxed_clone(&self) -> Box<dyn ErrorSink<QldbError>> {
@@ -155,9 +156,8 @@ where
         if is_start_session {
             if let Err(RusotoError::Service(SendCommandError::BadRequest(ref message))) = res {
                 debug!(
-                    "unable to start a transaction on session {} (will be discarded): {}",
-                    self.session_token(),
-                    message
+                    session_token = %self.session_token(),
+                    %message, "unable to start a transaction on session (will be discarded)"
                 );
                 self.notify_invalid();
             }

@@ -4,9 +4,6 @@ use rusoto_qldb_session::*;
 use anyhow::Result;
 use thiserror::Error;
 
-#[macro_use]
-extern crate log;
-
 pub mod api;
 pub mod driver;
 pub mod execution_stats;

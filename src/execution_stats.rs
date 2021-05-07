@@ -2,6 +2,7 @@ use rusoto_qldb_session::StartTransactionResult;
 use rusoto_qldb_session::TimingInformation as RusotoTimingInformation;
 use rusoto_qldb_session::{AbortTransactionResult, CommitTransactionResult, FetchPageResult};
 use rusoto_qldb_session::{ExecuteStatementResult, IOUsage as RusotoIOUsage};
+use tracing::trace;
 
 // public (stable) types for execution stats.
 //

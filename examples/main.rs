@@ -2,12 +2,12 @@ use amazon_qldb_driver::ion_compat;
 use amazon_qldb_driver::QldbDriverBuilder;
 use rusoto_core::Region;
 use tokio;
-#[macro_use]
-extern crate log;
+use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+    // Run me with `export RUST_LOG=debug` for more output!
+    tracing_subscriber::fmt::init();
 
     info!("Creating a QLDB driver");
     let driver = QldbDriverBuilder::new()

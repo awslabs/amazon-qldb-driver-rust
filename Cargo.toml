@@ -15,14 +15,14 @@ async-trait = "0.1.48"
 rusoto_core = "0.46.0"
 rusoto_qldb_session = "0.46.0"
 sha2 = "0.9.3"
-log = "0.4.14"
 ion-rs = "0.5"
 ion-c-sys = "0.4.7"
 rand = "0.8.3"
 futures = "0.3.13"
 bb8 = "0.7.0"
+tracing = "0.1.25"
 
 [dev-dependencies]
 hex-literal = "0.3.1"
-env_logger = "0.8.3"
 ansi_term = "0.12.1"
+tracing-subscriber = { version = "0.2.16", features = ["fmt"] }
