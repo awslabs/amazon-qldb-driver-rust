@@ -8,7 +8,7 @@ use anyhow::Result;
 use bb8::Pool;
 use rusoto_core::{
     credential::{DefaultCredentialsProvider, ProvideAwsCredentials},
-    Client, HttpClient, Region,
+    Client, HttpClient, Region, RusotoError,
 };
 use rusoto_qldb_session::*;
 use std::sync::Arc;
@@ -302,9 +302,15 @@ where
 
             let tx = match TransactionAttempt::start(pooled_session.clone()).await {
                 Ok(tx) => tx,
+                Err(QldbError::Rusoto(RusotoError::Service(SendCommandError::BadRequest(m)))) => {
+                    // FIXME: Include some sort of sleep and attempt cap.
+                    pooled_session.notify_invalid();
+                    debug!(message = %m, "unable to start a session, trying again on a different session");
+                    continue;
+                }
                 Err(e) => {
                     // FIXME: Include some sort of sleep and attempt cap.
-                    debug!(error = %e, "unable to start a session, trying again");
+                    debug!(error = %e, "unable to start a session, trying again on the same session");
                     continue;
                 }
             };
