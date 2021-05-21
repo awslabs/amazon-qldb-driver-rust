@@ -14,7 +14,7 @@ bytes = "1.0.1"
 async-trait = "0.1.48"
 rusoto_core = { version = "0.46.0", default_features = false, features = ["rustls"]}
 rusoto_qldb_session = { version = "0.46.0", default_features = false, features = ["rustls"]}
-sha2 = "0.9.3"
+sha2 = "0.9.5"
 ion-rs = "0.6"
 ion-c-sys = "0.4.9"
 rand = "0.8.3"
