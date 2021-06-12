@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .execution_stats()
             .timing_information
             .processing_time_milliseconds,
-        results.execution_stats().io_usage.read_ios
+        results.execution_stats().io_usage.read_i_os
     );
 
     info!("Goodbye!");

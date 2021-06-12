@@ -16,6 +16,7 @@ pub mod transaction;
 
 pub use crate::driver::{QldbDriver, QldbDriverBuilder};
 pub use crate::transaction::{TransactionAttempt, TransactionAttemptResult};
+pub use aws_sdk_qldbsession::model;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 

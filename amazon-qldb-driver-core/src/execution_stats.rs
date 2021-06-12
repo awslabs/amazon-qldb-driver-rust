@@ -1,8 +1,4 @@
-use rusoto_qldb_session::StartTransactionResult;
-use rusoto_qldb_session::TimingInformation as RusotoTimingInformation;
-use rusoto_qldb_session::{AbortTransactionResult, CommitTransactionResult, FetchPageResult};
-use rusoto_qldb_session::{ExecuteStatementResult, IOUsage as RusotoIOUsage};
-use tracing::trace;
+use aws_sdk_qldbsession::model;
 
 // public (stable) types for execution stats.
 //
@@ -11,10 +7,10 @@ use tracing::trace;
 // harder. Second, while the API models all values as optional, in reality QLDB
 // always returns execution stats.
 
-#[derive(Default, Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionStats {
-    pub timing_information: TimingInformation,
-    pub io_usage: IOUsage,
+    pub timing_information: model::TimingInformation,
+    pub io_usage: model::IOUsage,
 }
 
 impl ExecutionStats {
@@ -22,171 +18,120 @@ impl ExecutionStats {
     where
         R: HasExecutionStats,
     {
-        self.timing_information.accumulate(other);
-        self.io_usage.accumulate(other);
+        let timing = other.timing_information();
+        self.timing_information.processing_time_milliseconds += timing.processing_time_milliseconds;
+
+        let io = other.io_usage();
+        self.io_usage.read_i_os += io.read_i_os;
+        self.io_usage.write_i_os += io.write_i_os;
     }
 }
 
-#[derive(Default, Debug, Clone, Eq, PartialEq)]
-pub struct TimingInformation {
-    pub processing_time_milliseconds: i64,
-}
-
-impl TimingInformation {
-    pub fn accumulate<R>(&mut self, other: &R)
-    where
-        R: HasExecutionStats,
-    {
-        self.processing_time_milliseconds +=
-            other.timing_information().processing_time_milliseconds;
-    }
-}
-
-#[derive(Default, Debug, Clone, Eq, PartialEq)]
-pub struct IOUsage {
-    pub read_ios: i64,
-    pub write_ios: i64,
-}
-
-impl IOUsage {
-    pub fn accumulate<R>(&mut self, other: &R)
-    where
-        R: HasExecutionStats,
-    {
-        if let Some(IOUsage {
-            read_ios,
-            write_ios,
-        }) = other.io_usage()
-        {
-            self.read_ios += read_ios;
-            self.write_ios += write_ios;
-        }
-    }
-}
-
-impl From<(Option<RusotoTimingInformation>, Option<RusotoIOUsage>)> for ExecutionStats {
-    fn from(rusoto: (Option<RusotoTimingInformation>, Option<RusotoIOUsage>)) -> Self {
-        match rusoto {
-            (Some(t), Some(u)) => (t, u).into(),
-            _ => {
-                // NOTE: We don't bother with partial Some/None combinations. We
-                // expect to get both back, always. This branch could reasonably
-                // be replaced with `unreachable!`.
-                trace!("it is expected that QLDB always return timing and IO usage information, but did not");
-                ExecutionStats::default()
-            }
-        }
-    }
-}
-
-impl From<(RusotoTimingInformation, RusotoIOUsage)> for ExecutionStats {
-    fn from(rusoto: (RusotoTimingInformation, RusotoIOUsage)) -> Self {
+impl Default for ExecutionStats {
+    fn default() -> Self {
         ExecutionStats {
-            timing_information: rusoto.0.into(),
-            io_usage: rusoto.1.into(),
+            timing_information: model::TimingInformation::builder().build(),
+            io_usage: model::IOUsage::builder().build(),
         }
     }
 }
-
-impl From<Option<RusotoTimingInformation>> for TimingInformation {
-    fn from(rusoto: Option<RusotoTimingInformation>) -> Self {
-        rusoto
-            .map(|info| info.into())
-            .unwrap_or(TimingInformation::default())
-    }
-}
-
-impl From<RusotoTimingInformation> for TimingInformation {
-    fn from(rusoto: RusotoTimingInformation) -> Self {
-        TimingInformation {
-            processing_time_milliseconds: rusoto.processing_time_milliseconds.unwrap_or(0),
-        }
-    }
-}
-
-impl From<RusotoIOUsage> for IOUsage {
-    fn from(rusoto: RusotoIOUsage) -> Self {
-        IOUsage {
-            read_ios: rusoto.read_i_os.unwrap_or(0),
-            write_ios: rusoto.write_i_os.unwrap_or(0),
-        }
-    }
-}
-
 pub trait HasExecutionStats {
-    fn timing_information(&self) -> TimingInformation;
-    fn io_usage(&self) -> Option<IOUsage>;
+    fn timing_information(&self) -> model::TimingInformation;
+    fn io_usage(&self) -> model::IOUsage;
 }
 
 impl ExecutionStats {
     // Can't use From here because it conflicts with the stdlib.
-    pub(crate) fn from_api<S>(s: S) -> ExecutionStats
+    pub(crate) fn from_api<S>(api: S) -> ExecutionStats
     where
         S: HasExecutionStats,
     {
         ExecutionStats {
-            timing_information: s.timing_information(),
-            io_usage: s.io_usage().unwrap_or(IOUsage::default()),
+            timing_information: api.timing_information(),
+            io_usage: api.io_usage(),
         }
     }
 }
 
 impl HasExecutionStats for ExecutionStats {
-    fn timing_information(&self) -> TimingInformation {
+    fn timing_information(&self) -> model::TimingInformation {
         self.timing_information.clone()
     }
 
-    fn io_usage(&self) -> Option<IOUsage> {
-        Some(self.io_usage.clone())
+    fn io_usage(&self) -> model::IOUsage {
+        self.io_usage.clone()
     }
 }
 
-impl HasExecutionStats for StartTransactionResult {
-    fn timing_information(&self) -> TimingInformation {
-        self.timing_information.clone().into()
+pub(crate) mod rusoto_support {
+    use super::*;
+    use rusoto_qldb_session::IOUsage as RusotoIOUsage;
+    use rusoto_qldb_session::TimingInformation as RusotoTimingInformation;
+    use rusoto_qldb_session::*;
+
+    fn map_rusoto_timing_information(
+        rusoto: &Option<RusotoTimingInformation>,
+    ) -> model::TimingInformation {
+        rusoto
+            .as_ref()
+            .map(|info| {
+                model::TimingInformation::builder()
+                    .processing_time_milliseconds(
+                        info.processing_time_milliseconds.unwrap_or_default(),
+                    )
+                    .build()
+            })
+            .unwrap_or(model::TimingInformation::builder().build())
     }
 
-    fn io_usage(&self) -> Option<IOUsage> {
-        None
+    fn map_rusoto_io_usage(rusoto: &Option<RusotoIOUsage>) -> model::IOUsage {
+        rusoto
+            .as_ref()
+            .map(|io| {
+                model::IOUsage::builder()
+                    .read_i_os(io.read_i_os.unwrap_or_default())
+                    .write_i_os(io.write_i_os.unwrap_or_default())
+                    .build()
+            })
+            .unwrap_or(model::IOUsage::builder().build())
     }
+
+    /// Implements the execution stats API for types that only have timing
+    /// information.
+    macro_rules! impl_execution_stats_for_rusoto_1 {
+    ($($t:ty),*) => ($(
+        impl HasExecutionStats for $t {
+            fn timing_information(&self) -> model::TimingInformation {
+                map_rusoto_timing_information(&self.timing_information)
+            }
+
+            fn io_usage(&self) -> model::IOUsage {
+                model::IOUsage::builder().build()
+            }
+        }
+    )*)
 }
 
-impl HasExecutionStats for AbortTransactionResult {
-    fn timing_information(&self) -> TimingInformation {
-        self.timing_information.clone().into()
-    }
+    impl_execution_stats_for_rusoto_1!(StartTransactionResult, AbortTransactionResult);
 
-    fn io_usage(&self) -> Option<IOUsage> {
-        None
-    }
+    /// Implements for types that also have IO usage.
+    macro_rules! impl_execution_stats_for_rusoto_2 {
+    ($($t:ty),*) => ($(
+        impl HasExecutionStats for $t {
+            fn timing_information(&self) -> model::TimingInformation {
+                map_rusoto_timing_information(&self.timing_information)
+            }
+
+            fn io_usage(&self) -> model::IOUsage {
+                map_rusoto_io_usage(&self.consumed_i_os)
+            }
+        }
+    )*)
 }
 
-impl HasExecutionStats for ExecuteStatementResult {
-    fn timing_information(&self) -> TimingInformation {
-        self.timing_information.clone().into()
-    }
-
-    fn io_usage(&self) -> Option<IOUsage> {
-        self.consumed_i_os.clone().map(|usage| usage.into())
-    }
-}
-
-impl HasExecutionStats for FetchPageResult {
-    fn timing_information(&self) -> TimingInformation {
-        self.timing_information.clone().into()
-    }
-
-    fn io_usage(&self) -> Option<IOUsage> {
-        self.consumed_i_os.clone().map(|usage| usage.into())
-    }
-}
-
-impl HasExecutionStats for CommitTransactionResult {
-    fn timing_information(&self) -> TimingInformation {
-        self.timing_information.clone().into()
-    }
-
-    fn io_usage(&self) -> Option<IOUsage> {
-        self.consumed_i_os.clone().map(|usage| usage.into())
-    }
+    impl_execution_stats_for_rusoto_2!(
+        ExecuteStatementResult,
+        FetchPageResult,
+        CommitTransactionResult
+    );
 }
