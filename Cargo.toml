@@ -2,4 +2,5 @@
 
 members = [
     "amazon-qldb-driver-core",
+    "amazon-qldb-driver",
 ]

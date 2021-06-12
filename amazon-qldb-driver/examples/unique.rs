@@ -101,7 +101,7 @@ async fn main() -> Result<()> {
     // with adding delay to prove to yourself that another task *could* win.
 
     let mut race_won = false;
-    let mut races_lost = 0;
+    let mut races_lost: usize = 0;
 
     for handle in handles {
         let (winner, task_id) = handle.await?.await?;

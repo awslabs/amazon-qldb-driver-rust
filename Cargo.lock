@@ -10,6 +10,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "amazon-qldb-driver"
+version = "0.1.0"
+dependencies = [
+ "amazon-qldb-driver-core",
+ "anyhow",
+ "ion-c-sys",
+ "ion-rs",
+ "rusoto_core",
+ "rusoto_qldb_session",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "amazon-qldb-driver-core"
 version = "0.1.0"
 dependencies = [

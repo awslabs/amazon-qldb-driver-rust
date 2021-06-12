@@ -29,7 +29,7 @@ use tracing::debug;
 ///
 /// Usage example:
 /// ```no_run
-/// # use amazon_qldb_driver::QldbDriverBuilder;
+/// # use amazon_qldb_driver_core::QldbDriverBuilder;
 /// # use rusoto_core::region::Region;
 /// # use rusoto_qldb_session::QldbSessionClient;
 /// # use tokio;
@@ -245,7 +245,7 @@ where
     ///
     /// ```no_run
     /// use tokio;
-    /// use amazon_qldb_driver::QldbDriverBuilder;
+    /// use amazon_qldb_driver_core::QldbDriverBuilder;
     /// use rusoto_core::region::Region;
     ///
     /// #[tokio::main]
