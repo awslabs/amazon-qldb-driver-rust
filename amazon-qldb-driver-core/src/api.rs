@@ -4,6 +4,21 @@ use bytes::Bytes;
 use rusoto_qldb_session::*;
 use tracing::debug;
 
+/// The AWS SDK for Rust does not provide a trait abstraction over the API, so
+/// we provide one here.
+// TODO: Blocked. The reason is that only want to make a request in the aws-sdk
+// is to use `Client.send_command` builder API. There is no way (that I can see)
+// to ask the client to send an already-built request. This means I cannot fill
+// in the `input` type here.
+//
+// #[async_trait]
+// pub trait QldbSession {
+//     async fn send_command(
+//         &self,
+//         input: SendCommandRequest,
+//     ) -> Result<SendCommandResult, RusotoError<SendCommandError>>;
+// }
+
 pub type SessionToken = String;
 pub type TransactionId = String;
 
