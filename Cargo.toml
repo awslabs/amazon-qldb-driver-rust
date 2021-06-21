@@ -9,7 +9,7 @@ edition = "2018"
 [dependencies]
 thiserror = "1.0.25"
 anyhow = "1.0.39"
-tokio = "1.6.1"
+tokio = "1.7.1"
 bytes = "1.0.1"
 async-trait = "0.1.48"
 rusoto_core = { version = "0.46.0", default_features = false, features = ["rustls"]}
