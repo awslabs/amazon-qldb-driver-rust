@@ -343,7 +343,7 @@ pub mod rusoto {
                 Self {
                     commit_digest: model
                         .commit_digest
-                        .map(|b| Bytes::from(b.as_ref()))
+                        .map(|b| Bytes::from(b.into_inner()))
                         .expect("commit digest is always present"),
                     transaction_id: model
                         .transaction_id
@@ -362,9 +362,9 @@ pub mod rusoto {
             fn convert_from(model: ExecuteStatementRequest) -> Self {
                 Self {
                     parameters: model.parameters.map(|p| {
-                        p.iter()
+                        p.into_iter()
                             .map(|h| rusoto_qldb_session::ValueHolder {
-                                ion_binary: h.ion_binary.map(|b| Bytes::from(b.as_ref())),
+                                ion_binary: h.ion_binary.map(|b| Bytes::from(b.into_inner())),
                                 ion_text: h.ion_text,
                             })
                             .collect()
@@ -610,7 +610,7 @@ pub mod rusoto {
         async fn send_command(&self, input: SendCommandInput) -> QldbResult<SendCommandOutput> {
             let req = input.convert_into();
             let res = self.send_command(req).await?;
-            res.convert_into()
+            Ok(res.convert_into())
         }
     }
 

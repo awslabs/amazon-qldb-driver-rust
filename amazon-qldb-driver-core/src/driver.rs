@@ -391,7 +391,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::testing::TestQldbSessionClient;
+    use crate::api::rusoto::testing::TestQldbSessionClient;
     use anyhow::Result;
     use tokio::spawn;
 

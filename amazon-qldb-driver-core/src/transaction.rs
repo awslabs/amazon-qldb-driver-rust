@@ -149,7 +149,7 @@ where
                             "expected only one of ion binary or text".to_string(),
                         ))?,
                     };
-                    values.push(bytes);
+                    values.push(Bytes::from(bytes.into_inner()));
                 }
 
                 if let Some(next_page_token) = page.next_page_token {
@@ -200,7 +200,7 @@ where
         }
 
         if let Some(ref bytes) = res.commit_digest {
-            if bytes != &self.commit_digest.bytes() {
+            if bytes.as_ref() != &self.commit_digest.bytes()[..] {
                 Err(QldbError::IllegalState(format!(
                     "transaction {} response returned a different commit digest: {:#?}",
                     self.id, res,
