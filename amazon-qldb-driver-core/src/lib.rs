@@ -37,6 +37,8 @@ pub type QldbResult<T> = std::result::Result<T, QldbError>;
 
 #[derive(Error, Debug)]
 pub enum QldbError {
+    /// This error variant is used in place of a panic. It represents a codepath
+    /// that should not be taken. Panicing in libraries is bad!
     #[error("illegal state: {0}")]
     IllegalState(String),
     #[error("usage error: {0}")]
@@ -50,6 +52,12 @@ pub enum QldbError {
     SdkError(#[from] SdkError<SendCommandError>),
 }
 
+// Smithy-generated builders could return an error on build. In most cases, this
+// isn't actually possible (i.e. the method is infallible).
+//
+// In cases where an error could be returned, doing so would be a bug in the
+// driver (as it should have provided the requisite fields). The driver, being a
+// library, should never panic as crashing a user application is bad.
 impl From<BuildError> for QldbError {
     fn from(smithy: BuildError) -> Self {
         QldbError::IllegalState(format!("{}", smithy))
