@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::api::{QldbSession, QldbSessionApi, SessionToken};
-use crate::QldbError;
+use crate::error::QldbError;
 use async_trait::async_trait;
 use aws_sdk_qldbsession::{
     error::{SendCommandError, SendCommandErrorKind},

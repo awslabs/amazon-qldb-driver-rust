@@ -1,4 +1,4 @@
-use crate::QldbError;
+use crate::error::QldbError;
 use aws_sdk_qldbsession::error::SendCommandError;
 use aws_sdk_qldbsession::error::SendCommandErrorKind;
 use aws_sdk_qldbsession::SdkError;

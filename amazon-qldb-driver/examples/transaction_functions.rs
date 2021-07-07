@@ -1,9 +1,9 @@
-use amazon_qldb_driver::QldbDriverBuilder;
+use amazon_qldb_driver::{QldbDriverBuilder, QldbDriverBuilderExt};
 use amazon_qldb_driver::{TransactionAttempt, TransactionResult};
+use amazon_qldb_driver_core::api::QldbSession;
 use anyhow::Result;
 use ion_c_sys::reader::IonCReader;
 use rusoto_core::Region;
-use rusoto_qldb_session::QldbSession;
 use tokio;
 
 /// This example shows how you can use normal Rust functions as QLDB `transact`
@@ -15,6 +15,7 @@ use tokio;
 async fn main() -> Result<()> {
     let driver = QldbDriverBuilder::new()
         .ledger_name("sample-ledger")
+        .via_rusoto()
         .region(Region::UsWest2)
         .build()
         .await?;

@@ -1,7 +1,7 @@
-use amazon_qldb_driver::{QldbDriver, QldbDriverBuilder};
+use amazon_qldb_driver::{QldbDriver, QldbDriverBuilder, QldbDriverBuilderExt};
+use amazon_qldb_driver_core::api::QldbSession;
 use anyhow::Result;
 use rusoto_core::Region;
-use rusoto_qldb_session::QldbSession;
 use tokio::{self, spawn};
 
 /// This example shows how you can implement a unique constraint in QLDB. QLDB's
@@ -62,6 +62,7 @@ async fn main() -> Result<()> {
     // ```
     let driver = QldbDriverBuilder::new()
         .ledger_name("unique-example")
+        .via_rusoto()
         .region(Region::UsWest2)
         .build()
         .await?;

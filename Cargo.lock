@@ -16,6 +16,7 @@ name = "amazon-qldb-driver"
 version = "0.1.0"
 dependencies = [
  "amazon-qldb-driver-core",
+ "amazon-qldb-driver-rusoto",
  "anyhow",
  "ion-c-sys",
  "ion-rs",
@@ -43,14 +44,28 @@ dependencies = [
  "ion-c-sys",
  "ion-rs",
  "rand",
- "rusoto_core",
- "rusoto_qldb_session",
  "sha2",
  "smithy-http",
  "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "amazon-qldb-driver-rusoto"
+version = "0.1.0"
+dependencies = [
+ "amazon-qldb-driver-core",
+ "async-trait",
+ "aws-auth",
+ "aws-sdk-qldbsession",
+ "bytes 1.0.1",
+ "http",
+ "rusoto_core",
+ "rusoto_qldb_session",
+ "smithy-http",
+ "tokio",
 ]
 
 [[package]]

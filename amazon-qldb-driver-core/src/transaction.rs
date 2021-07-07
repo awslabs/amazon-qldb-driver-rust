@@ -1,6 +1,6 @@
 use crate::api::QldbSession;
+use crate::error::QldbError;
 use crate::qldb_hash::QldbHash;
-use crate::QldbError;
 use crate::{
     api::{QldbSessionApi, TransactionId},
     execution_stats::ExecutionStats,

@@ -1,17 +1,5 @@
-use crate::api::QldbSession;
-use crate::rusoto_ext::*;
-use crate::transaction::TransactionAttempt;
-use crate::{pool::QldbErrorLoggingErrorSink, transaction::TransactionAttemptResult};
-use crate::{
-    pool::QldbSessionManager, retry::default_retry_policy, retry::TransactionRetryPolicy, QldbError,
-};
 use anyhow::Result;
 use bb8::Pool;
-use rusoto_core::{
-    credential::{DefaultCredentialsProvider, ProvideAwsCredentials},
-    Client, HttpClient, Region,
-};
-use rusoto_qldb_session::QldbSessionClient;
 use std::sync::Arc;
 use std::{future::Future, time::Duration};
 use thiserror::Error;
@@ -19,37 +7,14 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::debug;
 
-/// A builder to help you customize a [`QldbDriver`].
-///
-/// In many cases, it is sufficient to use [`QldbDriver::new`] to build a driver out of a Rusoto client for a particular QLDB ledger. However, if you wish to customize the driver beyond the
-/// defaults, this builder is what you want.
-///
-/// Note that the following setters _must_ be called, else [`build`] will return an `Err`:
-/// - `ledger_name`
-/// - `client`
-///
-/// Usage example:
-/// ```no_run
-/// # use amazon_qldb_driver_core::QldbDriverBuilder;
-/// # use rusoto_core::region::Region;
-/// # use rusoto_qldb_session::QldbSessionClient;
-/// # use tokio;
-/// #
-/// # #[tokio::main]
-/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let client = QldbSessionClient::new(Region::UsWest2);
-/// let driver = QldbDriverBuilder::new()
-///     .ledger_name("sample-ledger")
-///     .region(Region::UsEast1)
-///     .build()
-///     .await?;
-/// # Ok(())
-/// # }
-/// ```
+use crate::api::QldbSession;
+use crate::error::{QldbError, QldbResult};
+use crate::transaction::TransactionAttempt;
+use crate::{pool::QldbErrorLoggingErrorSink, transaction::TransactionAttemptResult};
+use crate::{pool::QldbSessionManager, retry::default_retry_policy, retry::TransactionRetryPolicy};
+
 pub struct QldbDriverBuilder {
     ledger_name: Option<String>,
-    credentials_provider: Option<BoxedCredentialsProvider>,
-    region: Option<Region>,
     transaction_retry_policy: Box<dyn TransactionRetryPolicy + Send + Sync>,
     max_concurrent_transactions: u32,
 }
@@ -58,10 +23,6 @@ impl Default for QldbDriverBuilder {
     fn default() -> Self {
         QldbDriverBuilder {
             ledger_name: None,
-            credentials_provider: Some(into_boxed(
-                DefaultCredentialsProvider::new().expect("failed to create credentials provider"),
-            )),
-            region: None,
             transaction_retry_policy: Box::new(default_retry_policy()),
             max_concurrent_transactions: 1500,
         }
@@ -81,19 +42,6 @@ impl QldbDriverBuilder {
         self
     }
 
-    pub fn credentials_provider<P>(mut self, credentials_provider: P) -> Self
-    where
-        P: ProvideAwsCredentials + Send + Sync + 'static,
-    {
-        self.credentials_provider = Some(into_boxed(credentials_provider));
-        self
-    }
-
-    pub fn region(mut self, region: Region) -> Self {
-        self.region = Some(region);
-        self
-    }
-
     pub fn transaction_retry_policy<P>(mut self, transaction_retry_policy: P) -> Self
     where
         P: TransactionRetryPolicy + Send + Sync + 'static,
@@ -107,24 +55,7 @@ impl QldbDriverBuilder {
         self
     }
 
-    // FIXME: It's messy that we need to wrap credentials_provider in an Option
-    // just so we can avoid the partial move of self here (into
-    // build_with_client). Suggestion: refactor the builder to cleanly separate
-    // out the client builder.
-    pub async fn build(mut self) -> Result<QldbDriver<QldbSessionClient>> {
-        let client = Client::new_with(
-            self.credentials_provider.take().unwrap(),
-            default_dispatcher()?,
-        );
-        let region = match self.region {
-            Some(ref r) => r.clone(),
-            None => Region::default(),
-        };
-        let qldb_client = QldbSessionClient::new_with_client(client, region);
-        self.build_with_client(qldb_client).await
-    }
-
-    pub async fn build_with_client<C>(self, client: C) -> Result<QldbDriver<C>>
+    pub async fn build_with_client<C>(self, client: C) -> QldbResult<QldbDriver<C>>
     where
         C: QldbSession + Send + Sync + Clone + 'static,
     {
@@ -153,12 +84,6 @@ impl QldbDriverBuilder {
             transaction_retry_policy,
         })
     }
-}
-
-fn default_dispatcher() -> Result<HttpClient> {
-    let mut client = HttpClient::new()?;
-    client.local_agent(format!("QLDB Driver for Rust v{}", crate::version()));
-    Ok(client)
 }
 
 /// ## Concurrency
@@ -241,54 +166,6 @@ where
     /// closure! You should consider code running inside the closure as seeing
     /// speculative results that are only confirmed once the transaction
     /// commits.
-    ///
-    /// Here is some example code:
-    ///
-    /// ```no_run
-    /// use tokio;
-    /// use amazon_qldb_driver_core::QldbDriverBuilder;
-    /// use rusoto_core::region::Region;
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let driver = QldbDriverBuilder::new()
-    ///         .ledger_name("sample-ledger")
-    ///         .build()
-    ///         .await?;
-    ///     let (a, b) = driver.transact(|mut tx| async {
-    ///         let a = tx.execute_statement("SELECT 1").await?;
-    ///         let b = tx.execute_statement("SELECT 2").await?;
-    ///         tx.commit((a, b)).await
-    ///     }).await?;
-    ///
-    ///     Ok(())
-    /// }
-    /// ```
-    ///
-    /// Note that the `transaction` argument is `Fn` not `FnOnce` or `FnMut`.
-    /// This is to support retries (of the entire transaction) and ensure that
-    /// your function is idempotent (cannot mutate the environment it captures).
-    /// For example the following will not compile:
-    ///
-    /// ```compile_fail
-    /// # use tokio;
-    /// # use amazon_qldb_driver::QldbDriverBuilder;
-    /// # use rusoto_core::region::Region;
-    /// #
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// #   let driver = QldbDriverBuilder::new().ledger_name("sample-ledger").build()?;
-    ///     let mut string = String::new();
-    ///     driver.transact(|tx| async {
-    ///        string.push('1');
-    ///        tx.commit(()).await
-    ///     }).await?;
-    /// #
-    /// #   Ok(())
-    /// # }
-    /// ```
-    ///
-    /// Again, this is because `transaction` is `Fn` not `FnMut` and thus is not allowed to mutate `string`.
     pub async fn transact<F, Fut, R>(&self, transaction: F) -> Result<R>
     where
         Fut: Future<Output = Result<TransactionAttemptResult<R>>>,
@@ -383,70 +260,71 @@ where
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::api::rusoto::testing::TestQldbSessionClient;
-    use anyhow::Result;
-    use tokio::spawn;
+// FIXME: Move to correct crate (not sure where)
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use crate::api::rusoto::testing::TestQldbSessionClient;
+//     use anyhow::Result;
+//     use tokio::spawn;
 
-    // This test shows how to clone the driver for use in a multi-threaded tokio
-    // runtime. It's really just a compile test in that no actual transactions
-    // are run with expected results.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn multi_thread_example() -> Result<()> {
-        // this driver will be used concurrently.
-        let mock = TestQldbSessionClient::new();
-        let driver = QldbDriverBuilder::new()
-            .ledger_name("multi_thread_example")
-            .build_with_client(mock.clone())
-            .await?;
+//     // This test shows how to clone the driver for use in a multi-threaded tokio
+//     // runtime. It's really just a compile test in that no actual transactions
+//     // are run with expected results.
+//     #[tokio::test(flavor = "multi_thread")]
+//     async fn multi_thread_example() -> Result<()> {
+//         // this driver will be used concurrently.
+//         let mock = TestQldbSessionClient::new();
+//         let driver = QldbDriverBuilder::new()
+//             .ledger_name("multi_thread_example")
+//             .build_with_client(mock.clone())
+//             .await?;
 
-        let fut_1 = spawn({
-            let driver = driver.clone();
-            async move { driver.transact(|tx| async { tx.commit(()).await }).await }
-        });
+//         let fut_1 = spawn({
+//             let driver = driver.clone();
+//             async move { driver.transact(|tx| async { tx.commit(()).await }).await }
+//         });
 
-        let fut_2 = spawn({
-            let driver = driver.clone();
-            async move { driver.transact(|tx| async { tx.commit(()).await }).await }
-        });
+//         let fut_2 = spawn({
+//             let driver = driver.clone();
+//             async move { driver.transact(|tx| async { tx.commit(()).await }).await }
+//         });
 
-        fut_1.await??;
-        fut_2.await??;
+//         fut_1.await??;
+//         fut_2.await??;
 
-        Ok(())
-    }
+//         Ok(())
+//     }
 
-    // This test shows how to call abort. There are very reasons to call abort
-    // in QLDB as nearly all transactions *should* go through a `commit` to
-    // ensure the returned data was not concurrently modified.
-    #[tokio::test]
-    async fn abort_usage() -> Result<()> {
-        // this driver will be used concurrently.
-        let mock = TestQldbSessionClient::new();
-        let driver = QldbDriverBuilder::new()
-            .ledger_name("abort_usage")
-            .build_with_client(mock.clone())
-            .await?;
+//     // This test shows how to call abort. There are very few reasons to call
+//     // abort in QLDB as nearly all transactions *should* go through a `commit`
+//     // to ensure the returned data was not concurrently modified.
+//     #[tokio::test]
+//     async fn abort_usage() -> Result<()> {
+//         // this driver will be used concurrently.
+//         let mock = TestQldbSessionClient::new();
+//         let driver = QldbDriverBuilder::new()
+//             .ledger_name("abort_usage")
+//             .build_with_client(mock.clone())
+//             .await?;
 
-        let result = driver
-            .transact(|tx| async {
-                if 1 > 2 {
-                    tx.commit(42).await
-                } else {
-                    tx.abort().await
-                }
-            })
-            .await;
+//         let result = driver
+//             .transact(|tx| async {
+//                 if 1 > 2 {
+//                     tx.commit(42).await
+//                 } else {
+//                     tx.abort().await
+//                 }
+//             })
+//             .await;
 
-        let err = result.unwrap_err();
-        if let Ok(TransactionError::Aborted) = err.downcast::<TransactionError>() {
-            // expected
-        } else {
-            panic!("expected an aborted error");
-        }
+//         let err = result.unwrap_err();
+//         if let Ok(TransactionError::Aborted) = err.downcast::<TransactionError>() {
+//             // expected
+//         } else {
+//             panic!("expected an aborted error");
+//         }
 
-        Ok(())
-    }
-}
+//         Ok(())
+//     }
+// }
