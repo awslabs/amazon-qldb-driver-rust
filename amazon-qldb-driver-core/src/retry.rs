@@ -1,8 +1,9 @@
 use crate::QldbError;
+use aws_sdk_qldbsession::error::SendCommandError;
+use aws_sdk_qldbsession::error::SendCommandErrorKind;
+use aws_sdk_qldbsession::SdkError;
 use rand::thread_rng;
 use rand::Rng;
-use rusoto_core::RusotoError;
-use rusoto_qldb_session::*;
 use std::{cmp::min, time::Duration};
 
 pub fn default_retry_policy() -> impl TransactionRetryPolicy {
@@ -79,24 +80,34 @@ impl Default for ExponentialBackoffJitterTransactionRetryPolicy {
 impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
     fn on_err(&self, error: &QldbError, attempt_number: u32) -> RetryInstructions {
         match error {
-            QldbError::Rusoto(e) => {
+            QldbError::SdkError(e) => {
                 let should_retry = match &e {
-                    RusotoError::Service(service) => match &service {
-                        SendCommandError::BadRequest(_) => false,
-                        SendCommandError::InvalidSession(_) => true,
-                        SendCommandError::LimitExceeded(_) => false,
-                        SendCommandError::OccConflict(_) => true,
-                        SendCommandError::RateExceeded(_) => false,
+                    SdkError::ServiceError {
+                        err: SendCommandError { kind, .. },
+                        ..
+                    } => match kind {
+                        SendCommandErrorKind::BadRequestError(_) => false,
+                        SendCommandErrorKind::InvalidSessionError(_) => true,
+                        SendCommandErrorKind::LimitExceededError(_) => false,
+                        SendCommandErrorKind::OccConflictError(_) => true,
+                        SendCommandErrorKind::RateExceededError(_) => false,
+                        SendCommandErrorKind::CapacityExceededError(_) => true,
+                        SendCommandErrorKind::Unhandled(_) => false,
+                        _ => false,
                     },
-                    RusotoError::HttpDispatch(_) => true,
-                    RusotoError::Credentials(_) => false,
-                    RusotoError::Validation(_) => false,
-                    RusotoError::ParseError(_) => false,
-                    RusotoError::Unknown(r) => match r.status.as_u16() {
+                    // Construction failures mean that the sdk has rejected the
+                    // request shape (e.g. violating client-side constraints).
+                    // There is no point retrying, since the sdk will simply
+                    // reject again!
+                    SdkError::ConstructionFailure(_) => false,
+                    // We retry dispatch failures even though the request *may*
+                    // have been sent. In QLDB, the commit digest protects
+                    // against a duplicate statement being sent.
+                    SdkError::DispatchFailure(_) => true,
+                    SdkError::ResponseError { raw, .. } => match raw.status().as_u16() {
                         500 | 503 => true,
                         _ => false,
                     },
-                    RusotoError::Blocking => false,
                 };
 
                 if !should_retry || attempt_number > self.max_attempts {

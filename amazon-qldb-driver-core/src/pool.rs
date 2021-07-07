@@ -3,12 +3,16 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::api::{QldbSessionApi, SessionToken};
+use crate::api::{QldbSession, QldbSessionApi, SessionToken};
 use crate::QldbError;
 use async_trait::async_trait;
+use aws_sdk_qldbsession::{
+    error::{SendCommandError, SendCommandErrorKind},
+    input::SendCommandInput,
+    output::SendCommandOutput,
+    SdkError,
+};
 use bb8::{ErrorSink, ManageConnection};
-use rusoto_core::RusotoError;
-use rusoto_qldb_session::*;
 use tracing::debug;
 
 pub struct QldbSessionManager<C>
@@ -130,8 +134,8 @@ where
 {
     async fn send_command(
         &self,
-        input: SendCommandRequest,
-    ) -> Result<SendCommandResult, RusotoError<SendCommandError>> {
+        input: SendCommandInput,
+    ) -> Result<SendCommandOutput, SdkError<SendCommandError>> {
         let client = if let Ok(g) = self.inner.lock() {
             if g.discard {
                 panic!("session {} should have been discarded", g.token)
@@ -149,17 +153,23 @@ where
         let is_start_session = input.start_session.is_some();
         let res = client.send_command(input).await;
 
-        if let Err(RusotoError::Service(SendCommandError::InvalidSession(_))) = res {
-            self.notify_invalid();
-        }
-
-        if is_start_session {
-            if let Err(RusotoError::Service(SendCommandError::BadRequest(ref message))) = res {
-                debug!(
-                    session_token = %self.session_token(),
-                    %message, "unable to start a transaction on session (will be discarded)"
-                );
+        if let Err(SdkError::ServiceError {
+            err: SendCommandError { kind, .. },
+            ..
+        }) = &res
+        {
+            if let SendCommandErrorKind::InvalidSessionError(_) = kind {
                 self.notify_invalid();
+            }
+
+            if is_start_session {
+                if let SendCommandErrorKind::BadRequestError(ref message) = kind {
+                    debug!(
+                        session_token = %self.session_token(),
+                        %message, "unable to start a transaction on session (will be discarded)"
+                    );
+                    self.notify_invalid();
+                }
             }
         }
 

@@ -1,3 +1,4 @@
+use crate::api::QldbSession;
 use crate::qldb_hash::QldbHash;
 use crate::QldbError;
 use crate::{
@@ -9,7 +10,6 @@ use anyhow::Result;
 use bytes::Bytes;
 use ion_c_sys::reader::IonCReaderHandle;
 use ion_c_sys::result::IonCError;
-use rusoto_qldb_session::QldbSession;
 use std::convert::TryFrom;
 use tracing::debug;
 

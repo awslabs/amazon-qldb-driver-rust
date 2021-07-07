@@ -39,6 +39,7 @@ dependencies = [
  "bytes 1.0.1",
  "futures",
  "hex-literal",
+ "http",
  "ion-c-sys",
  "ion-rs",
  "rand",

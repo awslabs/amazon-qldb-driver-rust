@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use aws_sdk_qldbsession::{input::SendCommandInput, model::*, output::SendCommandOutput, Blob};
+use aws_sdk_qldbsession::{
+    error::SendCommandError, input::SendCommandInput, model::*, output::SendCommandOutput, Blob,
+    SdkError,
+};
 use bytes::Bytes;
 use tracing::debug;
 
@@ -9,7 +12,10 @@ use crate::{QldbError, QldbResult};
 /// we provide one here.
 #[async_trait]
 pub trait QldbSession {
-    async fn send_command(&self, input: SendCommandInput) -> QldbResult<SendCommandOutput>;
+    async fn send_command(
+        &self,
+        input: SendCommandInput,
+    ) -> Result<SendCommandOutput, SdkError<SendCommandError>>;
 }
 
 pub type SessionToken = String;
@@ -289,12 +295,20 @@ pub mod rusoto {
     use async_trait::async_trait;
 
     mod convert {
+        use aws_sdk_qldbsession::error::{
+            BadRequestError, InvalidSessionError, LimitExceededError, OccConflictError,
+            RateExceededError, SendCommandError, SendCommandErrorKind,
+        };
         use aws_sdk_qldbsession::input::SendCommandInput;
-        use aws_sdk_qldbsession::model::*;
         use aws_sdk_qldbsession::output::SendCommandOutput;
         use aws_sdk_qldbsession::Blob;
+        use aws_sdk_qldbsession::{model::*, SdkError};
         use bytes::Bytes;
+        use rusoto_core::RusotoError;
         use rusoto_qldb_session;
+        use smithy_http::body::SdkBody;
+
+        use crate::{StringError, UnitError};
 
         /// In-crate implementations of the stdlib From/Into traits. These are
         /// required because the Smithy and Rusoto shapes are both out-of-crate,
@@ -401,6 +415,30 @@ pub mod rusoto {
         impl ConvertFrom<StartTransactionRequest> for rusoto_qldb_session::StartTransactionRequest {
             fn convert_from(_: StartTransactionRequest) -> Self {
                 Self {}
+            }
+        }
+
+        // Maps the response type (one `Result` to another). The type signature
+        // is awful, but don't be alarmed. This is just more Rusoto -> smithy
+        // mapping.
+        impl
+            ConvertFrom<
+                Result<
+                    rusoto_qldb_session::SendCommandResult,
+                    RusotoError<rusoto_qldb_session::SendCommandError>,
+                >,
+            > for Result<SendCommandOutput, SdkError<SendCommandError>>
+        {
+            fn convert_from(
+                rusoto: Result<
+                    rusoto_qldb_session::SendCommandResult,
+                    RusotoError<rusoto_qldb_session::SendCommandError>,
+                >,
+            ) -> Self {
+                match rusoto {
+                    Ok(value) => Ok(value.convert_into()),
+                    Err(err) => Err(err.convert_into()),
+                }
             }
         }
 
@@ -600,6 +638,91 @@ pub mod rusoto {
                 builder.build()
             }
         }
+
+        impl ConvertFrom<RusotoError<rusoto_qldb_session::SendCommandError>>
+            for SdkError<SendCommandError>
+        {
+            // Note: all the HTTP body stuff is set to empty. At the time of
+            // writing, it was too annoying to convert these over and the driver
+            // didn't actually care.
+            fn convert_from(rusoto: RusotoError<rusoto_qldb_session::SendCommandError>) -> Self {
+                match rusoto {
+                    RusotoError::Service(err) => match err {
+                        rusoto_qldb_session::SendCommandError::BadRequest(message) => {
+                            SdkError::ServiceError {
+                                err: SendCommandError::new(
+                                    SendCommandErrorKind::BadRequestError(
+                                        BadRequestError::builder().message(message).build(),
+                                    ),
+                                    Default::default(),
+                                ),
+                                raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                            }
+                        }
+                        rusoto_qldb_session::SendCommandError::InvalidSession(message) => {
+                            SdkError::ServiceError {
+                                err: SendCommandError::new(
+                                    SendCommandErrorKind::InvalidSessionError(
+                                        InvalidSessionError::builder().message(message).build(),
+                                    ),
+                                    Default::default(),
+                                ),
+                                raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                            }
+                        }
+                        rusoto_qldb_session::SendCommandError::LimitExceeded(message) => {
+                            SdkError::ServiceError {
+                                err: SendCommandError::new(
+                                    SendCommandErrorKind::LimitExceededError(
+                                        LimitExceededError::builder().message(message).build(),
+                                    ),
+                                    Default::default(),
+                                ),
+                                raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                            }
+                        }
+                        rusoto_qldb_session::SendCommandError::OccConflict(message) => {
+                            SdkError::ServiceError {
+                                err: SendCommandError::new(
+                                    SendCommandErrorKind::OccConflictError(
+                                        OccConflictError::builder().message(message).build(),
+                                    ),
+                                    Default::default(),
+                                ),
+                                raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                            }
+                        }
+                        rusoto_qldb_session::SendCommandError::RateExceeded(message) => {
+                            SdkError::ServiceError {
+                                err: SendCommandError::new(
+                                    SendCommandErrorKind::RateExceededError(
+                                        RateExceededError::builder().message(message).build(),
+                                    ),
+                                    Default::default(),
+                                ),
+                                raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                            }
+                        }
+                    },
+                    RusotoError::HttpDispatch(err) => SdkError::DispatchFailure(Box::new(err)),
+                    RusotoError::Credentials(err) => SdkError::ConstructionFailure(Box::new(err)),
+                    RusotoError::Validation(message) => {
+                        SdkError::ConstructionFailure(Box::new(StringError(message)))
+                    }
+                    RusotoError::ParseError(message) => SdkError::ResponseError {
+                        raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                        err: Box::new(StringError(message)),
+                    },
+                    RusotoError::Unknown(_http) => SdkError::ResponseError {
+                        raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                        err: Box::new(UnitError),
+                    },
+                    RusotoError::Blocking => {
+                        SdkError::DispatchFailure(Box::new(StringError("blocking".to_string())))
+                    }
+                }
+            }
+        }
     }
 
     #[async_trait]
@@ -607,10 +730,13 @@ pub mod rusoto {
     where
         R: rusoto_qldb_session::QldbSession + Send + Sync,
     {
-        async fn send_command(&self, input: SendCommandInput) -> QldbResult<SendCommandOutput> {
+        async fn send_command(
+            &self,
+            input: SendCommandInput,
+        ) -> Result<SendCommandOutput, SdkError<SendCommandError>> {
             let req = input.convert_into();
-            let res = self.send_command(req).await?;
-            Ok(res.convert_into())
+            let res = self.send_command(req).await;
+            res.convert_into()
         }
     }
 

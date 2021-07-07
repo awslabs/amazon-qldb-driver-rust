@@ -1,7 +1,6 @@
-use rusoto_core::RusotoError;
-use rusoto_qldb_session::*;
+use core::fmt;
 
-pub use aws_sdk_qldbsession::{model, SdkError};
+pub use aws_sdk_qldbsession::{error, input, model, output, SdkError};
 
 use anyhow::Result;
 use smithy_http::operation::BuildError;
@@ -45,11 +44,8 @@ pub enum QldbError {
     UsageError(String),
     #[error("unexpected response: {0}")]
     UnexpectedResponse(String),
-    // TODO: Abstract over the SDK error
     #[error("communication failure: {0}")]
-    Rusoto(#[from] RusotoError<SendCommandError>),
-    #[error("communication failure: {0}")]
-    SdkError(#[from] SdkError<SendCommandError>),
+    SdkError(#[from] SdkError<error::SendCommandError>),
 }
 
 // Smithy-generated builders could return an error on build. In most cases, this
@@ -63,3 +59,25 @@ impl From<BuildError> for QldbError {
         QldbError::IllegalState(format!("{}", smithy))
     }
 }
+
+#[derive(Debug)]
+pub struct UnitError;
+
+impl fmt::Display for UnitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "no further informaation")
+    }
+}
+
+impl std::error::Error for UnitError {}
+
+#[derive(Debug)]
+pub struct StringError(String);
+
+impl fmt::Display for StringError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for StringError {}
