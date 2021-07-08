@@ -54,4 +54,5 @@ pub mod driver_ext;
 pub mod rusoto_ext;
 pub mod testing;
 
+pub use convert::RusotoQldbSessionClient;
 pub use driver_ext::QldbDriverBuilderExt;
