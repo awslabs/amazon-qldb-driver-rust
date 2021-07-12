@@ -19,7 +19,7 @@ aws_sdk_qldbsession = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "
 smithy-http = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.11-alpha", package = "smithy-http", features = [] }
 sha2 = "0.9.5"
 ion-rs = "0.6"
-ion-c-sys = "0.4.9"
+ion-c-sys = "0.4.11"
 rand = "0.8.3"
 futures = "0.3.15"
 bb8 = "0.7.0"
