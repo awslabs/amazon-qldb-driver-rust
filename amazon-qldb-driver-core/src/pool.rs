@@ -158,12 +158,12 @@ where
             ..
         }) = &res
         {
-            if let SendCommandErrorKind::InvalidSessionError(_) = kind {
+            if let SendCommandErrorKind::InvalidSessionException(_) = kind {
                 self.notify_invalid();
             }
 
             if is_start_session {
-                if let SendCommandErrorKind::BadRequestError(ref message) = kind {
+                if let SendCommandErrorKind::BadRequestException(ref message) = kind {
                     debug!(
                         session_token = %self.session_token(),
                         %message, "unable to start a transaction on session (will be discarded)"

@@ -2,8 +2,8 @@ use amazon_qldb_driver_core::api::QldbSession;
 use async_trait::async_trait;
 
 use aws_sdk_qldbsession::error::{
-    BadRequestError, InvalidSessionError, LimitExceededError, OccConflictError, RateExceededError,
-    SendCommandError, SendCommandErrorKind,
+    BadRequestException, InvalidSessionException, LimitExceededException, OccConflictException,
+    RateExceededException, SendCommandError, SendCommandErrorKind,
 };
 use aws_sdk_qldbsession::input::SendCommandInput;
 use aws_sdk_qldbsession::output::SendCommandOutput;
@@ -303,9 +303,9 @@ impl ConvertFrom<rusoto_qldb_session::TimingInformation> for TimingInformation {
     }
 }
 
-impl ConvertFrom<rusoto_qldb_session::IOUsage> for IOUsage {
+impl ConvertFrom<rusoto_qldb_session::IOUsage> for IoUsage {
     fn convert_from(rusoto: rusoto_qldb_session::IOUsage) -> Self {
-        IOUsage::builder()
+        IoUsage::builder()
             .read_i_os(rusoto.read_i_os.unwrap_or(0))
             .write_i_os(rusoto.write_i_os.unwrap_or(0))
             .build()
@@ -357,8 +357,8 @@ impl ConvertFrom<RusotoError<rusoto_qldb_session::SendCommandError>>
                 rusoto_qldb_session::SendCommandError::BadRequest(message) => {
                     SdkError::ServiceError {
                         err: SendCommandError::new(
-                            SendCommandErrorKind::BadRequestError(
-                                BadRequestError::builder().message(message).build(),
+                            SendCommandErrorKind::BadRequestException(
+                                BadRequestException::builder().message(message).build(),
                             ),
                             Default::default(),
                         ),
@@ -368,8 +368,8 @@ impl ConvertFrom<RusotoError<rusoto_qldb_session::SendCommandError>>
                 rusoto_qldb_session::SendCommandError::InvalidSession(message) => {
                     SdkError::ServiceError {
                         err: SendCommandError::new(
-                            SendCommandErrorKind::InvalidSessionError(
-                                InvalidSessionError::builder().message(message).build(),
+                            SendCommandErrorKind::InvalidSessionException(
+                                InvalidSessionException::builder().message(message).build(),
                             ),
                             Default::default(),
                         ),
@@ -379,8 +379,8 @@ impl ConvertFrom<RusotoError<rusoto_qldb_session::SendCommandError>>
                 rusoto_qldb_session::SendCommandError::LimitExceeded(message) => {
                     SdkError::ServiceError {
                         err: SendCommandError::new(
-                            SendCommandErrorKind::LimitExceededError(
-                                LimitExceededError::builder().message(message).build(),
+                            SendCommandErrorKind::LimitExceededException(
+                                LimitExceededException::builder().message(message).build(),
                             ),
                             Default::default(),
                         ),
@@ -390,8 +390,8 @@ impl ConvertFrom<RusotoError<rusoto_qldb_session::SendCommandError>>
                 rusoto_qldb_session::SendCommandError::OccConflict(message) => {
                     SdkError::ServiceError {
                         err: SendCommandError::new(
-                            SendCommandErrorKind::OccConflictError(
-                                OccConflictError::builder().message(message).build(),
+                            SendCommandErrorKind::OccConflictException(
+                                OccConflictException::builder().message(message).build(),
                             ),
                             Default::default(),
                         ),
@@ -401,8 +401,8 @@ impl ConvertFrom<RusotoError<rusoto_qldb_session::SendCommandError>>
                 rusoto_qldb_session::SendCommandError::RateExceeded(message) => {
                     SdkError::ServiceError {
                         err: SendCommandError::new(
-                            SendCommandErrorKind::RateExceededError(
-                                RateExceededError::builder().message(message).build(),
+                            SendCommandErrorKind::RateExceededException(
+                                RateExceededException::builder().message(message).build(),
                             ),
                             Default::default(),
                         ),

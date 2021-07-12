@@ -86,12 +86,12 @@ impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
                         err: SendCommandError { kind, .. },
                         ..
                     } => match kind {
-                        SendCommandErrorKind::BadRequestError(_) => false,
-                        SendCommandErrorKind::InvalidSessionError(_) => true,
-                        SendCommandErrorKind::LimitExceededError(_) => false,
-                        SendCommandErrorKind::OccConflictError(_) => true,
-                        SendCommandErrorKind::RateExceededError(_) => false,
-                        SendCommandErrorKind::CapacityExceededError(_) => true,
+                        SendCommandErrorKind::BadRequestException(_) => false,
+                        SendCommandErrorKind::InvalidSessionException(_) => true,
+                        SendCommandErrorKind::LimitExceededException(_) => false,
+                        SendCommandErrorKind::OccConflictException(_) => true,
+                        SendCommandErrorKind::RateExceededException(_) => false,
+                        SendCommandErrorKind::CapacityExceededException(_) => true,
                         SendCommandErrorKind::Unhandled(_) => false,
                         _ => false,
                     },

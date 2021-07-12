@@ -10,7 +10,7 @@ use aws_sdk_qldbsession::model;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionStats {
     pub timing_information: model::TimingInformation,
-    pub io_usage: model::IOUsage,
+    pub io_usage: model::IoUsage,
 }
 
 impl ExecutionStats {
@@ -42,13 +42,13 @@ impl Default for ExecutionStats {
     fn default() -> Self {
         ExecutionStats {
             timing_information: model::TimingInformation::builder().build(),
-            io_usage: model::IOUsage::builder().build(),
+            io_usage: model::IoUsage::builder().build(),
         }
     }
 }
 pub trait HasExecutionStats {
     fn timing_information(&self) -> model::TimingInformation;
-    fn io_usage(&self) -> model::IOUsage;
+    fn io_usage(&self) -> model::IoUsage;
 }
 
 impl HasExecutionStats for ExecutionStats {
@@ -56,7 +56,7 @@ impl HasExecutionStats for ExecutionStats {
         self.timing_information.clone()
     }
 
-    fn io_usage(&self) -> model::IOUsage {
+    fn io_usage(&self) -> model::IoUsage {
         self.io_usage.clone()
     }
 }
@@ -70,8 +70,8 @@ macro_rules! impl_execution_stats_1 {
                     self.timing_information.clone().unwrap_or(model::TimingInformation::builder().build())
                 }
 
-                fn io_usage(&self) -> model::IOUsage {
-                    model::IOUsage::builder().build()
+                fn io_usage(&self) -> model::IoUsage {
+                    model::IoUsage::builder().build()
                 }
             }
         )*)
@@ -87,8 +87,8 @@ macro_rules! impl_execution_stats_2 {
                     self.timing_information.clone().unwrap_or(model::TimingInformation::builder().build())
                 }
 
-                fn io_usage(&self) -> model::IOUsage {
-                    self.consumed_i_os.clone().unwrap_or(model::IOUsage::builder().build())
+                fn io_usage(&self) -> model::IoUsage {
+                    self.consumed_i_os.clone().unwrap_or(model::IoUsage::builder().build())
                 }
             }
         )*)
