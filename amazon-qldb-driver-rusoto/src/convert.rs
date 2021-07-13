@@ -2,8 +2,9 @@ use amazon_qldb_driver_core::api::QldbSession;
 use async_trait::async_trait;
 
 use aws_sdk_qldbsession::error::{
-    BadRequestException, InvalidSessionException, LimitExceededException, OccConflictException,
-    RateExceededException, SendCommandError, SendCommandErrorKind,
+    BadRequestException, CapacityExceededException, InvalidSessionException,
+    LimitExceededException, OccConflictException, RateExceededException, SendCommandError,
+    SendCommandErrorKind,
 };
 use aws_sdk_qldbsession::input::SendCommandInput;
 use aws_sdk_qldbsession::output::SendCommandOutput;
@@ -403,6 +404,19 @@ impl ConvertFrom<RusotoError<rusoto_qldb_session::SendCommandError>>
                         err: SendCommandError::new(
                             SendCommandErrorKind::RateExceededException(
                                 RateExceededException::builder().message(message).build(),
+                            ),
+                            Default::default(),
+                        ),
+                        raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                    }
+                }
+                rusoto_qldb_session::SendCommandError::CapacityExceeded(message) => {
+                    SdkError::ServiceError {
+                        err: SendCommandError::new(
+                            SendCommandErrorKind::CapacityExceededException(
+                                CapacityExceededException::builder()
+                                    .message(message)
+                                    .build(),
                             ),
                             Default::default(),
                         ),
