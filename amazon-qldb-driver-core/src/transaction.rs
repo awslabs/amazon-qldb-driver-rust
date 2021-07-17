@@ -1,5 +1,5 @@
 use crate::api::QldbSession;
-use crate::error::QldbError;
+use crate::error::{QldbError, QldbResult};
 use crate::qldb_hash::QldbHash;
 use crate::{
     api::{QldbSessionApi, TransactionId},
@@ -108,28 +108,39 @@ where
         Ok(transaction)
     }
 
-    // FIXME: params, result, IonHash
-    pub async fn execute_statement<S>(
-        &mut self,
-        statement: S,
-    ) -> Result<StatementResults, QldbError>
+    pub fn statement<S>(&mut self, statement: S) -> StatementBuilder<'_, C>
     where
         S: Into<String>,
     {
-        let statement = statement.into();
+        StatementBuilder::new(self, statement.into())
+    }
 
+    /// Send a statement without any parameters. For example, this could be used
+    /// to create a table where the name is already sanitized.
+    pub async fn execute_statement<S>(&mut self, partiql: S) -> Result<StatementResults, QldbError>
+    where
+        S: Into<String>,
+    {
+        self.statement(partiql).execute().await
+    }
+
+    // FIXME: don't buffer all results
+    async fn execute_statement_internal(
+        &mut self,
+        statement: Statement,
+    ) -> QldbResult<StatementResults> {
         let mut execution_stats = ExecutionStats::default();
         let execute_result = self
             .pooled_session
             .execute_statement(
                 &self.pooled_session.session_token(),
                 &self.id,
-                statement.clone(),
+                statement.partiql.clone(),
             )
             .await?;
         execution_stats.accumulate(&execute_result);
 
-        let statement_hash = QldbHash::from_bytes(ion_hash(&statement)).unwrap();
+        let statement_hash = QldbHash::from_bytes(ion_hash(&statement.partiql)).unwrap();
         self.commit_digest = self.commit_digest.dot(&statement_hash);
 
         let mut values = vec![];
@@ -238,4 +249,49 @@ where
 
         Ok(TransactionAttemptResult::Aborted)
     }
+}
+
+pub struct StatementBuilder<'tx, C>
+where
+    C: QldbSession + Send + Sync + Clone,
+{
+    attempt: &'tx mut TransactionAttempt<C>,
+    statement: Statement,
+}
+
+impl<'tx, C> StatementBuilder<'tx, C>
+where
+    C: QldbSession + Send + Sync + Clone,
+{
+    fn new(attempt: &'tx mut TransactionAttempt<C>, partiql: String) -> StatementBuilder<'tx, C> {
+        StatementBuilder {
+            attempt,
+            statement: Statement {
+                partiql: partiql.into(),
+                params: vec![],
+            },
+        }
+    }
+
+    // TODO: This currently takes anything as bytes, which is wrong in two ways:
+    // 1. need an IonElement so we can hash it. in the future, we hope to remove this as a requirement
+    // 2. perhaps we want an in-crate trait for coherency reasons
+    // TODO: make public when ready
+    fn param<B>(mut self, param: B) -> StatementBuilder<'tx, C>
+    where
+        B: Into<Bytes>,
+    {
+        self.statement.params.push(param.into());
+        self
+    }
+
+    async fn execute(self) -> QldbResult<StatementResults> {
+        let StatementBuilder { attempt, statement } = self;
+        attempt.execute_statement_internal(statement).await
+    }
+}
+
+struct Statement {
+    partiql: String,
+    params: Vec<Bytes>,
 }
