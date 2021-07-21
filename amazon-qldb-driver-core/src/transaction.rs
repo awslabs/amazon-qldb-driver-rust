@@ -1,5 +1,6 @@
 use crate::api::QldbSession;
 use crate::error::{QldbError, QldbResult};
+use crate::execution_stats::HasExecutionStats;
 use crate::qldb_hash::QldbHash;
 use crate::{
     api::{QldbSessionApi, TransactionId},
@@ -7,10 +8,14 @@ use crate::{
 };
 use crate::{ion_compat::ion_hash, pool::QldbHttp1Connection};
 use anyhow::Result;
+use aws_sdk_qldbsession::model::{FetchPageResult, Page, ValueHolder};
 use bytes::Bytes;
+use futures::{FutureExt, Stream};
 use ion_c_sys::reader::IonCReaderHandle;
 use ion_c_sys::result::IonCError;
 use std::convert::TryFrom;
+use std::pin::Pin;
+use std::task::{self, Poll};
 use tracing::debug;
 
 /// The results of executing a statement.
@@ -22,19 +27,69 @@ use tracing::debug;
 /// [`cumulative_timing_information`] and [`cumulative_io_usage`] represent the
 /// sum of server reported timing and IO usage across all pages that were
 /// fetched.
+pub struct ResultStream<'tx, C>
+where
+    C: QldbSession + Send + Sync + Clone,
+{
+    attempt: &'tx mut TransactionAttempt<C>,
+    current_page: Option<(Page, usize)>,
+    execution_stats: ExecutionStats,
+}
+
+impl<'tx, C> ResultStream<'tx, C>
+where
+    C: QldbSession + Send + Sync + Clone,
+{
+    fn new(attempt: &'tx mut TransactionAttempt<C>) -> ResultStream<'tx, C> {
+        ResultStream {
+            attempt,
+            current_page: None,
+            execution_stats: ExecutionStats::default(),
+        }
+    }
+
+    fn on_next_page<S: HasExecutionStats>(&mut self, page: Option<Page>, stats: &S) {
+        self.execution_stats.accumulate(stats);
+        self.current_page = match page {
+            Some(p) => Some((p, 0)),
+            None => None,
+        };
+    }
+
+    // FIXME: Don't clone
+    async fn next_value(&mut self) -> QldbResult<Option<ValueHolder>> {
+        // Fast path: already have results in memory
+        if let Some((ref page, ref mut index)) = self.current_page {
+            if let Some(ref values) = page.values {
+                if values.len() < *index {
+                    *index += 1;
+                    return Ok(Some(values[*index - 1].clone()));
+                }
+            }
+        }
+
+        // If we didn't return, that means we need to fetch more results if
+        // there is a `next_page_token`.
+        if let Some(Some(next_page_token)) = self
+            .current_page
+            .map(|(ref p, _)| p.next_page_token.clone())
+        {
+            let fetch = self.attempt.fetch_page_internal(next_page_token).await?;
+            self.on_next_page(fetch.page, &fetch);
+            return self.next_value().await;
+        }
+
+        // Otherwise, we're done.
+        Ok(None)
+    }
+}
+
 pub struct StatementResults {
     values: Vec<Bytes>,
     execution_stats: ExecutionStats,
 }
 
 impl StatementResults {
-    fn new(values: Vec<Bytes>, execution_stats: ExecutionStats) -> StatementResults {
-        StatementResults {
-            values,
-            execution_stats,
-        }
-    }
-
     pub fn len(&self) -> usize {
         self.values.len()
     }
@@ -117,7 +172,7 @@ where
 
     /// Send a statement without any parameters. For example, this could be used
     /// to create a table where the name is already sanitized.
-    pub async fn execute_statement<S>(&mut self, partiql: S) -> Result<StatementResults, QldbError>
+    pub async fn execute_statement<S>(&mut self, partiql: S) -> Result<ResultStream, QldbError>
     where
         S: Into<String>,
     {
@@ -128,8 +183,7 @@ where
     async fn execute_statement_internal(
         &mut self,
         statement: Statement,
-    ) -> QldbResult<StatementResults> {
-        let mut execution_stats = ExecutionStats::default();
+    ) -> QldbResult<ResultStream> {
         let execute_result = self
             .pooled_session
             .execute_statement(
@@ -138,10 +192,12 @@ where
                 statement.partiql.clone(),
             )
             .await?;
-        execution_stats.accumulate(&execute_result);
 
         let statement_hash = QldbHash::from_bytes(ion_hash(&statement.partiql)).unwrap();
         self.commit_digest = self.commit_digest.dot(&statement_hash);
+
+        let mut results = ResultStream::new(self);
+        results.on_next_page(execute_result.first_page, &execute_result);
 
         let mut values = vec![];
         let mut current = execute_result.first_page;
@@ -184,7 +240,14 @@ where
 
         self.accumulated_execution_stats
             .accumulate(&execution_stats);
-        Ok(StatementResults::new(values, execution_stats))
+        Ok(ResultStream::new(values, execution_stats))
+    }
+
+    async fn fetch_page_internal(
+        &mut self,
+        next_page_token: String,
+    ) -> QldbResult<FetchPageResult> {
+        todo!()
     }
 
     pub async fn commit<R>(mut self, user_data: R) -> Result<TransactionAttemptResult<R>> {
@@ -285,7 +348,7 @@ where
         self
     }
 
-    async fn execute(self) -> QldbResult<StatementResults> {
+    async fn execute(self) -> QldbResult<ResultStream> {
         let StatementBuilder { attempt, statement } = self;
         attempt.execute_statement_internal(statement).await
     }
