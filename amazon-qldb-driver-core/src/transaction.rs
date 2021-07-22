@@ -59,7 +59,7 @@ where
 
     // FIXME: Don't clone values
     #[async_recursion]
-    async fn next_value(&mut self) -> QldbResult<Option<ValueHolder>> {
+    pub async fn next_value(&mut self) -> QldbResult<Option<ValueHolder>> {
         // Fast path: already have results in memory
         if let Some((ref page, ref mut index)) = self.current_page {
             if let Some(ref values) = page.values {
@@ -90,7 +90,7 @@ where
         Ok(None)
     }
 
-    async fn buffer_all(mut self) -> QldbResult<StatementResults> {
+    pub async fn buffer_all(mut self) -> QldbResult<StatementResults> {
         let mut values = vec![];
         while let Some(value) = self.next_value().await? {
             // FIXME: Currently duplicated with `IonAccess`. Change examples and
@@ -151,7 +151,8 @@ impl IonAccess for ValueHolder {
                 "expected exactly one value, but found multiple".to_string(),
             ))?
         }
-        return Ok(elem);
+
+        Ok(elem)
     }
 }
 
