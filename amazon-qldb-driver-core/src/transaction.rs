@@ -63,7 +63,7 @@ where
         // Fast path: already have results in memory
         if let Some((ref page, ref mut index)) = self.current_page {
             if let Some(ref values) = page.values {
-                if values.len() < *index {
+                if *index < values.len() {
                     *index += 1;
                     return Ok(Some(values[*index - 1].clone()));
                 }

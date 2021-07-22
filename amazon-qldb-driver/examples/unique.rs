@@ -107,11 +107,11 @@ async fn main() -> Result<()> {
     for handle in handles {
         let (winner, task_id) = handle.await?.await?;
         if winner {
+            println!("task {} won the race!", task_id);
             if race_won {
                 panic!("only 1 transaction should ever win the race");
             } else {
                 race_won = true;
-                println!("task {} won the race!", task_id);
             }
         } else {
             races_lost = races_lost + 1;
@@ -167,10 +167,16 @@ where
     let winner = driver
         .transact(|mut tx| async {
             let check = tx
-                .execute_statement("select * from example where id = 1")
+                .statement("select * from example where id = 1")
+                .execute()
+                .await?
+                .buffer_all()
                 .await?;
             if check.len() == 0 {
-                tx.execute_statement("insert into example `{id: 1}`")
+                tx.statement("insert into example `{id: 1}`")
+                    .execute()
+                    .await?
+                    .buffer_all()
                     .await?;
                 tx.commit(true).await
             } else {
