@@ -1,6 +1,5 @@
 use crate::api::QldbSession;
 use crate::error::{QldbError, QldbResult};
-use crate::execution_stats::HasExecutionStats;
 use crate::qldb_hash::QldbHash;
 use crate::{
     api::{QldbSessionApi, TransactionId},
@@ -8,14 +7,14 @@ use crate::{
 };
 use crate::{ion_compat::ion_hash, pool::QldbHttp1Connection};
 use anyhow::Result;
-use aws_sdk_qldbsession::model::{FetchPageResult, Page, ValueHolder};
+use async_recursion::async_recursion;
+use aws_sdk_qldbsession::model::{ExecuteStatementResult, FetchPageResult, Page, ValueHolder};
 use bytes::Bytes;
-use futures::{FutureExt, Stream};
 use ion_c_sys::reader::IonCReaderHandle;
 use ion_c_sys::result::IonCError;
+use ion_rs::value::owned::OwnedElement;
+use ion_rs::value::reader::{element_reader, ElementReader};
 use std::convert::TryFrom;
-use std::pin::Pin;
-use std::task::{self, Poll};
 use tracing::debug;
 
 /// The results of executing a statement.
@@ -40,23 +39,26 @@ impl<'tx, C> ResultStream<'tx, C>
 where
     C: QldbSession + Send + Sync + Clone,
 {
-    fn new(attempt: &'tx mut TransactionAttempt<C>) -> ResultStream<'tx, C> {
-        ResultStream {
-            attempt,
-            current_page: None,
-            execution_stats: ExecutionStats::default(),
-        }
-    }
-
-    fn on_next_page<S: HasExecutionStats>(&mut self, page: Option<Page>, stats: &S) {
-        self.execution_stats.accumulate(stats);
-        self.current_page = match page {
+    fn new(
+        attempt: &'tx mut TransactionAttempt<C>,
+        initial: ExecuteStatementResult,
+    ) -> ResultStream<'tx, C> {
+        let mut execution_stats = ExecutionStats::default();
+        execution_stats.accumulate(&initial);
+        let current_page = match initial.first_page {
             Some(p) => Some((p, 0)),
             None => None,
         };
+
+        ResultStream {
+            attempt,
+            current_page,
+            execution_stats,
+        }
     }
 
-    // FIXME: Don't clone
+    // FIXME: Don't clone values
+    #[async_recursion]
     async fn next_value(&mut self) -> QldbResult<Option<ValueHolder>> {
         // Fast path: already have results in memory
         if let Some((ref page, ref mut index)) = self.current_page {
@@ -72,15 +74,84 @@ where
         // there is a `next_page_token`.
         if let Some(Some(next_page_token)) = self
             .current_page
-            .map(|(ref p, _)| p.next_page_token.clone())
+            .as_ref()
+            .map(|(p, _)| p.next_page_token.clone())
         {
             let fetch = self.attempt.fetch_page_internal(next_page_token).await?;
-            self.on_next_page(fetch.page, &fetch);
+            self.execution_stats.accumulate(&fetch);
+            self.current_page = match fetch.page {
+                Some(p) => Some((p, 0)),
+                None => None,
+            };
             return self.next_value().await;
         }
 
         // Otherwise, we're done.
         Ok(None)
+    }
+
+    async fn buffer_all(mut self) -> QldbResult<StatementResults> {
+        let mut values = vec![];
+        while let Some(value) = self.next_value().await? {
+            // FIXME: Currently duplicated with `IonAccess`. Change examples and
+            // shell to use IonAccess instead!
+            let blob = match (value.ion_text, value.ion_binary) {
+                (None, Some(bytes)) => bytes,
+                (Some(_txt), None) => Err(QldbError::UnexpectedResponse(
+                    "expecting ion binary".to_string(),
+                ))?,
+                _ => Err(QldbError::UnexpectedResponse(
+                    "expected only one of ion binary or text".to_string(),
+                ))?,
+            };
+
+            values.push(Bytes::from(blob.as_ref().to_owned()))
+        }
+
+        Ok(StatementResults {
+            values,
+            execution_stats: self.execution_stats,
+        })
+    }
+}
+
+pub trait IonAccess {
+    fn into_element(self) -> QldbResult<OwnedElement>;
+}
+
+impl IonAccess for ValueHolder {
+    fn into_element(self) -> QldbResult<OwnedElement> {
+        let blob = match (self.ion_text, self.ion_binary) {
+            (None, Some(bytes)) => bytes,
+            (Some(_txt), None) => Err(QldbError::UnexpectedResponse(
+                "expecting ion binary".to_string(),
+            ))?,
+            _ => Err(QldbError::UnexpectedResponse(
+                "expected only one of ion binary or text".to_string(),
+            ))?,
+        };
+
+        let mut iter = element_reader().iterate_over(blob.as_ref()).map_err(|e| {
+            QldbError::UnexpectedResponse(format!("unable to build a reader: {}", e))
+        })?;
+        let elem = match iter.next() {
+            Some(r) => match r {
+                Ok(elem) => elem,
+                Err(err) => Err(QldbError::UnexpectedResponse(format!(
+                    "unable to parse element: {}",
+                    err
+                )))?,
+            },
+            None => Err(QldbError::UnexpectedResponse(
+                "expected exactly one value, but found none".to_string(),
+            ))?,
+        };
+        if iter.next().is_some() {
+            Err(QldbError::UnexpectedResponse(
+                "expected exactly one value, but found multiple".to_string(),
+            ))?
+        }
+        return Ok(elem);
     }
 }
 
@@ -172,18 +243,19 @@ where
 
     /// Send a statement without any parameters. For example, this could be used
     /// to create a table where the name is already sanitized.
-    pub async fn execute_statement<S>(&mut self, partiql: S) -> Result<ResultStream, QldbError>
+    pub async fn execute_statement<'a, S>(&'a mut self, partiql: S) -> QldbResult<StatementResults>
     where
         S: Into<String>,
     {
-        self.statement(partiql).execute().await
+        self.statement(partiql).execute().await?.buffer_all().await
     }
 
     // FIXME: don't buffer all results
-    async fn execute_statement_internal(
-        &mut self,
+    // FIXME: Move methods to ext trait to separate the external API from the internal one.
+    async fn execute_statement_internal<'a>(
+        &'a mut self,
         statement: Statement,
-    ) -> QldbResult<ResultStream> {
+    ) -> QldbResult<ResultStream<'a, C>> {
         let execute_result = self
             .pooled_session
             .execute_statement(
@@ -196,58 +268,20 @@ where
         let statement_hash = QldbHash::from_bytes(ion_hash(&statement.partiql)).unwrap();
         self.commit_digest = self.commit_digest.dot(&statement_hash);
 
-        let mut results = ResultStream::new(self);
-        results.on_next_page(execute_result.first_page, &execute_result);
-
-        let mut values = vec![];
-        let mut current = execute_result.first_page;
-        loop {
-            let page = match &current {
-                Some(_) => current.take().unwrap(),
-                None => break,
-            };
-
-            if let Some(holders) = page.values {
-                for holder in holders {
-                    let bytes = match (holder.ion_text, holder.ion_binary) {
-                        (None, Some(bytes)) => bytes,
-                        (Some(_txt), None) => unimplemented!(), // TextIonCursor::new(txt),
-                        _ => Err(QldbError::UnexpectedResponse(
-                            "expected only one of ion binary or text".to_string(),
-                        ))?,
-                    };
-                    values.push(Bytes::from(bytes.into_inner()));
-                }
-
-                if let Some(next_page_token) = page.next_page_token {
-                    let fetch_page_result = self
-                        .pooled_session
-                        .fetch_page(
-                            &self.pooled_session.session_token(),
-                            &self.id,
-                            next_page_token,
-                        )
-                        .await?;
-
-                    execution_stats.accumulate(&fetch_page_result);
-
-                    if let Some(p) = fetch_page_result.page {
-                        current.replace(p);
-                    }
-                }
-            }
-        }
-
-        self.accumulated_execution_stats
-            .accumulate(&execution_stats);
-        Ok(ResultStream::new(values, execution_stats))
+        Ok(ResultStream::new(self, execute_result))
     }
 
     async fn fetch_page_internal(
         &mut self,
         next_page_token: String,
     ) -> QldbResult<FetchPageResult> {
-        todo!()
+        self.pooled_session
+            .fetch_page(
+                &self.pooled_session.session_token(),
+                &self.id,
+                next_page_token,
+            )
+            .await
     }
 
     pub async fn commit<R>(mut self, user_data: R) -> Result<TransactionAttemptResult<R>> {
@@ -340,7 +374,7 @@ where
     // 1. need an IonElement so we can hash it. in the future, we hope to remove this as a requirement
     // 2. perhaps we want an in-crate trait for coherency reasons
     // TODO: make public when ready
-    fn param<B>(mut self, param: B) -> StatementBuilder<'tx, C>
+    pub fn param<B>(mut self, param: B) -> StatementBuilder<'tx, C>
     where
         B: Into<Bytes>,
     {
@@ -348,7 +382,7 @@ where
         self
     }
 
-    async fn execute(self) -> QldbResult<ResultStream> {
+    pub async fn execute(self) -> QldbResult<ResultStream<'tx, C>> {
         let StatementBuilder { attempt, statement } = self;
         attempt.execute_statement_internal(statement).await
     }
