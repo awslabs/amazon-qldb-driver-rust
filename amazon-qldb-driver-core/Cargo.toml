@@ -11,7 +11,7 @@ thiserror = "1.0.25"
 anyhow = "1.0.39"
 tokio = { version = "1", features = ["full"] }
 bytes = "1.0.1"
-async-trait = "0.1.48"
+async-trait = "0.1.51"
 # Note: The default features include "client" which generates an actual client.
 # We don't want that! Instead, we just want the *shapes*. This allows the -core
 # package to be agnostic of the actual client used.
