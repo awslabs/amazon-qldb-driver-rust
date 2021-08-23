@@ -129,6 +129,9 @@ where
         &mut self,
         statement: Statement,
     ) -> QldbResult<StatementResults> {
+        let statement_hash = QldbHash::from_bytes(ion_hash(&statement.partiql)).unwrap();
+        self.commit_digest = self.commit_digest.dot(&statement_hash);
+
         let mut execution_stats = ExecutionStats::default();
         let execute_result = self
             .pooled_session
@@ -139,9 +142,6 @@ where
             )
             .await?;
         execution_stats.accumulate(&execute_result);
-
-        let statement_hash = QldbHash::from_bytes(ion_hash(&statement.partiql)).unwrap();
-        self.commit_digest = self.commit_digest.dot(&statement_hash);
 
         let mut values = vec![];
         let mut current = execute_result.first_page;
