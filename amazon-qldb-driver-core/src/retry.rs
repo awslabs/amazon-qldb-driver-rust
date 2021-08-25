@@ -104,7 +104,7 @@ impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
                     // have been sent. In QLDB, the commit digest protects
                     // against a duplicate statement being sent.
                     SdkError::DispatchFailure(_) => true,
-                    SdkError::ResponseError { raw, .. } => match raw.status().as_u16() {
+                    SdkError::ResponseError { raw, .. } => match raw.http().status().as_u16() {
                         500 | 503 => true,
                         _ => false,
                     },

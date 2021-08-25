@@ -8,14 +8,14 @@ edition = "2018"
 
 [dependencies]
 amazon-qldb-driver-core = { version = "*", path = "../amazon-qldb-driver-core" }
-aws_sdk_qldbsession = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.12-alpha", package = "aws-sdk-qldbsession", features = ["rustls"] }
-smithy-http = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.12-alpha", package = "smithy-http", features = [] }
-aws-auth = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.13-alpha", package = "aws-auth", features = [] }
-rusoto_core = { version = "0.47.0", default_features = false, features = ["rustls"]}
-rusoto_qldb_session = { version = "0.47.0", default_features = false, features = ["rustls"]}
+aws_sdk_qldbsession = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.16-alpha", package = "aws-sdk-qldbsession", features = ["rustls"] }
+smithy-http = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.16-alpha", package = "smithy-http", features = [] }
+aws-auth = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.16-alpha", package = "aws-auth", features = [] }
+rusoto_core = { version = "0.47.0", default_features = false, features = ["rustls"] }
+rusoto_qldb_session = { version = "0.47.0", default_features = false, features = ["rustls"] }
 async-trait = "0.1.51"
-bytes = "1.0.1"
+bytes = "1.1.0"
 http = "0.2.4"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1.10.1", features = ["full"] }

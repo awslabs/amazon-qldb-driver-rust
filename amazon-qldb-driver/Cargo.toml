@@ -9,14 +9,14 @@ edition = "2018"
 [dependencies]
 amazon-qldb-driver-core = { version = "*", path = "../amazon-qldb-driver-core" }
 amazon-qldb-driver-rusoto = { version = "*", path = "../amazon-qldb-driver-rusoto" }
-tokio = "1.10.0"
-rusoto_core = { version = "0.47.0", default_features = false, features = ["rustls"]}
-rusoto_qldb_session = { version = "0.47.0", default_features = false, features = ["rustls"]}
+tokio = "1.10.1"
+rusoto_core = { version = "0.47.0", default_features = false, features = ["rustls"] }
+rusoto_qldb_session = { version = "0.47.0", default_features = false, features = ["rustls"] }
 
 [dev-dependencies]
-thiserror = "1.0.25"
+thiserror = "1.0.26"
 anyhow = "1.0.43"
-tracing = "0.1.25"
-tracing-subscriber = { version = "0.2.16", features = ["fmt"] }
-ion-rs = "0.6"
-ion-c-sys = "0.4.9"
+tracing = "0.1.26"
+tracing-subscriber = { version = "0.2.20", features = ["fmt"] }
+ion-rs = "0.6.0"
+ion-c-sys = "0.4.11"

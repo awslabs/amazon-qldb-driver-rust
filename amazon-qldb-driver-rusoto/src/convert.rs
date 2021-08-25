@@ -14,6 +14,7 @@ use bytes::Bytes;
 use rusoto_core::RusotoError;
 use rusoto_qldb_session::{self, QldbSessionClient};
 use smithy_http::body::SdkBody;
+use smithy_http::operation;
 
 use amazon_qldb_driver_core::error::{StringError, UnitError};
 
@@ -363,7 +364,9 @@ impl ConvertFrom<RusotoError<rusoto_qldb_session::SendCommandError>>
                             ),
                             Default::default(),
                         ),
-                        raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                        raw: operation::Response::new(
+                            http::Response::builder().body(SdkBody::empty()).unwrap(),
+                        ),
                     }
                 }
                 rusoto_qldb_session::SendCommandError::InvalidSession(message) => {
@@ -374,7 +377,9 @@ impl ConvertFrom<RusotoError<rusoto_qldb_session::SendCommandError>>
                             ),
                             Default::default(),
                         ),
-                        raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                        raw: operation::Response::new(
+                            http::Response::builder().body(SdkBody::empty()).unwrap(),
+                        ),
                     }
                 }
                 rusoto_qldb_session::SendCommandError::LimitExceeded(message) => {
@@ -385,7 +390,9 @@ impl ConvertFrom<RusotoError<rusoto_qldb_session::SendCommandError>>
                             ),
                             Default::default(),
                         ),
-                        raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                        raw: operation::Response::new(
+                            http::Response::builder().body(SdkBody::empty()).unwrap(),
+                        ),
                     }
                 }
                 rusoto_qldb_session::SendCommandError::OccConflict(message) => {
@@ -396,7 +403,9 @@ impl ConvertFrom<RusotoError<rusoto_qldb_session::SendCommandError>>
                             ),
                             Default::default(),
                         ),
-                        raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                        raw: operation::Response::new(
+                            http::Response::builder().body(SdkBody::empty()).unwrap(),
+                        ),
                     }
                 }
                 rusoto_qldb_session::SendCommandError::RateExceeded(message) => {
@@ -407,7 +416,9 @@ impl ConvertFrom<RusotoError<rusoto_qldb_session::SendCommandError>>
                             ),
                             Default::default(),
                         ),
-                        raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                        raw: operation::Response::new(
+                            http::Response::builder().body(SdkBody::empty()).unwrap(),
+                        ),
                     }
                 }
                 rusoto_qldb_session::SendCommandError::CapacityExceeded(message) => {
@@ -420,7 +431,9 @@ impl ConvertFrom<RusotoError<rusoto_qldb_session::SendCommandError>>
                             ),
                             Default::default(),
                         ),
-                        raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                        raw: operation::Response::new(
+                            http::Response::builder().body(SdkBody::empty()).unwrap(),
+                        ),
                     }
                 }
             },
@@ -430,11 +443,15 @@ impl ConvertFrom<RusotoError<rusoto_qldb_session::SendCommandError>>
                 SdkError::ConstructionFailure(Box::new(StringError(message)))
             }
             RusotoError::ParseError(message) => SdkError::ResponseError {
-                raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                raw: operation::Response::new(
+                    http::Response::builder().body(SdkBody::empty()).unwrap(),
+                ),
                 err: Box::new(StringError(message)),
             },
             RusotoError::Unknown(_http) => SdkError::ResponseError {
-                raw: http::Response::builder().body(SdkBody::empty()).unwrap(),
+                raw: operation::Response::new(
+                    http::Response::builder().body(SdkBody::empty()).unwrap(),
+                ),
                 err: Box::new(UnitError),
             },
             RusotoError::Blocking => {
