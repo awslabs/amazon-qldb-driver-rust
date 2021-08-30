@@ -14,7 +14,7 @@ rusoto_core = { version = "0.47.0", default_features = false, features = ["rustl
 rusoto_qldb_session = { version = "0.47.0", default_features = false, features = ["rustls"] }
 
 [dev-dependencies]
-thiserror = "1.0.26"
+thiserror = "1.0.28"
 anyhow = "1.0.43"
 tracing = "0.1.26"
 tracing-subscriber = { version = "0.2.20", features = ["fmt"] }
