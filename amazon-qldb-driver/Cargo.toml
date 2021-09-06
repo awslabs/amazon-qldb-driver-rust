@@ -9,7 +9,7 @@ edition = "2018"
 [dependencies]
 amazon-qldb-driver-core = { version = "*", path = "../amazon-qldb-driver-core" }
 amazon-qldb-driver-rusoto = { version = "*", path = "../amazon-qldb-driver-rusoto" }
-tokio = "1.10.1"
+tokio = "1.11.0"
 rusoto_core = { version = "0.47.0", default_features = false, features = ["rustls"] }
 rusoto_qldb_session = { version = "0.47.0", default_features = false, features = ["rustls"] }
 
