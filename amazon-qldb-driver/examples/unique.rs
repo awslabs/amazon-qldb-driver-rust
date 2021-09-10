@@ -1,7 +1,6 @@
-use amazon_qldb_driver::{QldbDriver, QldbDriverBuilder, QldbDriverBuilderExt};
+use amazon_qldb_driver::{aws_sdk_qldbsession::Config, QldbDriver, QldbDriverBuilder};
 use amazon_qldb_driver_core::api::QldbSession;
 use anyhow::Result;
-use rusoto_core::Region;
 use tokio::{self, spawn};
 
 /// This example shows how you can implement a unique constraint in QLDB. QLDB's
@@ -33,6 +32,9 @@ use tokio::{self, spawn};
 // by default, this is a multi-threaded runtime and uses as many threads as you have CPUs
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Run me with `export RUST_LOG=debug` for more output!
+    tracing_subscriber::fmt::init();
+
     // First we initialize a QLDB driver. We're going to connect to a specific
     // ledger named 'unique-example' in us-west-2. Feel free to change the
     // ledger name or region as you see fit!
@@ -60,11 +62,11 @@ async fn main() -> Result<()> {
     // ```sh
     // qldb> delete from example
     // ```
+    let aws_config = aws_config::load_from_env().await;
+
     let driver = QldbDriverBuilder::new()
         .ledger_name("unique-example")
-        .via_rusoto()
-        .region(Region::UsWest2)
-        .build()
+        .sdk_config(Config::new(&aws_config))
         .await?;
 
     // Next up, we'll run 100 concurrent transactions. Each of them will run the

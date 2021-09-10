@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
+use aws_hyper::{Client, DynConnector, SmithyConnector};
 use aws_sdk_qldbsession::{
     error::SendCommandError, input::SendCommandInput, model::*, output::SendCommandOutput, Blob,
-    SdkError,
+    Config, SdkError,
 };
 use bytes::Bytes;
 use tracing::debug;
@@ -16,6 +19,41 @@ pub trait QldbSession {
         &self,
         input: SendCommandInput,
     ) -> Result<SendCommandOutput, SdkError<SendCommandError>>;
+}
+
+#[derive(Clone)]
+pub struct QldbSessionSdk<C = DynConnector> {
+    inner: Arc<QldbSessionSdkInner<C>>,
+}
+
+struct QldbSessionSdkInner<C = DynConnector> {
+    client: Client<C>,
+    conf: Config,
+}
+
+impl<C> QldbSessionSdk<C> {
+    pub(crate) fn new(client: Client<C>, conf: Config) -> QldbSessionSdk<C> {
+        let inner = QldbSessionSdkInner { client, conf };
+        QldbSessionSdk {
+            inner: Arc::new(inner),
+        }
+    }
+}
+
+#[async_trait]
+impl<C> QldbSession for QldbSessionSdk<C>
+where
+    C: SmithyConnector,
+{
+    async fn send_command(
+        &self,
+        input: SendCommandInput,
+    ) -> Result<SendCommandOutput, SdkError<SendCommandError>> {
+        let op = input
+            .make_operation(&self.inner.conf)
+            .map_err(|err| SdkError::ConstructionFailure(err.into()))?;
+        self.inner.client.call(op).await
+    }
 }
 
 pub type SessionToken = String;
