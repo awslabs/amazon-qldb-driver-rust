@@ -1,7 +1,6 @@
+use amazon_qldb_driver::aws_sdk_qldbsession::Config;
 use amazon_qldb_driver::ion_compat;
 use amazon_qldb_driver::QldbDriverBuilder;
-use amazon_qldb_driver::QldbDriverBuilderExt;
-use rusoto_core::Region;
 use tokio;
 use tracing::info;
 
@@ -10,12 +9,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run me with `export RUST_LOG=debug` for more output!
     tracing_subscriber::fmt::init();
 
+    let aws_config = aws_config::load_from_env().await;
+
     info!("Creating a QLDB driver");
     let driver = QldbDriverBuilder::new()
         .ledger_name("sample-ledger")
-        .via_rusoto()
-        .region(Region::UsWest2)
-        .build()
+        .sdk_config(Config::new(&aws_config))
         .await?;
 
     // Usage example 1: Here we use a closure that returns a `Result<R, QldbError>`. The closure is wrapped in ceremony to appease the type system.

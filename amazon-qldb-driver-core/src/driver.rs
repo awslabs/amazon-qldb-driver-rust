@@ -1,4 +1,6 @@
 use anyhow::Result;
+use aws_hyper::Client;
+use aws_sdk_qldbsession::Config;
 use bb8::Pool;
 use std::sync::Arc;
 use std::{future::Future, time::Duration};
@@ -7,7 +9,7 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::debug;
 
-use crate::api::QldbSession;
+use crate::api::{QldbSession, QldbSessionSdk};
 use crate::error::{QldbError, QldbResult};
 use crate::transaction::TransactionAttempt;
 use crate::{pool::QldbErrorLoggingErrorSink, transaction::TransactionAttemptResult};
@@ -53,6 +55,15 @@ impl QldbDriverBuilder {
     pub fn max_sessions(mut self, max_sessions: u32) -> Self {
         self.max_concurrent_transactions = max_sessions;
         self
+    }
+
+    /// Build a `QldbDriver` using the AWS SDK for Rust.
+    ///
+    /// `sdk_config` will be used to create a configured instance of the SDK.
+    pub async fn sdk_config(self, sdk_config: Config) -> QldbResult<QldbDriver<QldbSessionSdk>> {
+        let hyper = Client::https();
+        let client = QldbSessionSdk::new(hyper, sdk_config);
+        self.build_with_client(client).await
     }
 
     pub async fn build_with_client<C>(self, client: C) -> QldbResult<QldbDriver<C>>

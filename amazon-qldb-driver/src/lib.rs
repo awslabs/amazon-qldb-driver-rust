@@ -6,4 +6,3 @@ pub use amazon_qldb_driver_core::transaction::StatementResults;
 pub use amazon_qldb_driver_core::{
     retry, version, QldbDriver, QldbDriverBuilder, TransactionAttempt, TransactionResult,
 };
-pub use amazon_qldb_driver_rusoto::QldbDriverBuilderExt;
