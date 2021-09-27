@@ -15,7 +15,7 @@ rusoto_core = { version = "0.47.0", default_features = false, features = ["rustl
 rusoto_qldb_session = { version = "0.47.0", default_features = false, features = ["rustls"] }
 async-trait = "0.1.51"
 bytes = "1.1.0"
-http = "0.2.4"
+http = "0.2.5"
 
 [dev-dependencies]
 tokio = { version = "1.10.1", features = ["full"] }
