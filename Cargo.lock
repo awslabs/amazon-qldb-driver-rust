@@ -45,7 +45,7 @@ dependencies = [
  "ion-rs",
  "rand",
  "sha2",
- "smithy-http",
+ "smithy-http 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.19-alpha)",
  "thiserror",
  "tokio",
  "tracing",
@@ -64,7 +64,7 @@ dependencies = [
  "http",
  "rusoto_core",
  "rusoto_qldb_session",
- "smithy-http",
+ "smithy-http 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.19-alpha)",
  "tokio",
 ]
 
@@ -134,7 +134,7 @@ dependencies = [
  "aws-types",
  "pin-project",
  "smithy-async",
- "smithy-http",
+ "smithy-http 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
  "tokio",
  "tracing",
  "zeroize",
@@ -148,7 +148,7 @@ dependencies = [
  "aws-types",
  "http",
  "regex",
- "smithy-http",
+ "smithy-http 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
 ]
 
 [[package]]
@@ -159,8 +159,8 @@ dependencies = [
  "aws-types",
  "http",
  "lazy_static",
- "smithy-http",
- "smithy-types",
+ "smithy-http 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
+ "smithy-types 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
  "thiserror",
 ]
 
@@ -181,9 +181,9 @@ dependencies = [
  "hyper-rustls",
  "pin-project",
  "smithy-client",
- "smithy-http",
+ "smithy-http 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
  "smithy-http-tower",
- "smithy-types",
+ "smithy-types 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
  "tokio",
  "tower",
  "tracing",
@@ -202,9 +202,9 @@ dependencies = [
  "aws-types",
  "bytes 1.1.0",
  "http",
- "smithy-http",
+ "smithy-http 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
  "smithy-json",
- "smithy-types",
+ "smithy-types 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
 ]
 
 [[package]]
@@ -216,7 +216,7 @@ dependencies = [
  "aws-sigv4",
  "aws-types",
  "http",
- "smithy-http",
+ "smithy-http 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
  "thiserror",
 ]
 
@@ -1633,9 +1633,9 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "pin-project",
- "smithy-http",
+ "smithy-http 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
  "smithy-http-tower",
- "smithy-types",
+ "smithy-types 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
  "tokio",
  "tower",
  "tracing",
@@ -1648,7 +1648,7 @@ source = "git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha#dab3b0a9
 dependencies = [
  "bytes 1.1.0",
  "crc32fast",
- "smithy-types",
+ "smithy-types 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
 ]
 
 [[package]]
@@ -1665,7 +1665,27 @@ dependencies = [
  "percent-encoding",
  "pin-project",
  "smithy-eventstream",
- "smithy-types",
+ "smithy-types 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "smithy-http"
+version = "0.0.1"
+source = "git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.19-alpha#74bae11ae1af170e33fb695488f1f514f21884ae"
+dependencies = [
+ "bytes 1.1.0",
+ "bytes-utils",
+ "futures-core",
+ "http",
+ "http-body",
+ "hyper",
+ "percent-encoding",
+ "pin-project",
+ "smithy-types 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.19-alpha)",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -1681,7 +1701,7 @@ dependencies = [
  "http",
  "http-body",
  "pin-project",
- "smithy-http",
+ "smithy-http 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
  "tower",
  "tracing",
 ]
@@ -1691,13 +1711,24 @@ name = "smithy-json"
 version = "0.1.0"
 source = "git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha#dab3b0a97d8213105549f35914670dd7bd91d619"
 dependencies = [
- "smithy-types",
+ "smithy-types 0.0.1 (git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha)",
 ]
 
 [[package]]
 name = "smithy-types"
 version = "0.0.1"
 source = "git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.16-alpha#dab3b0a97d8213105549f35914670dd7bd91d619"
+dependencies = [
+ "chrono",
+ "itoa",
+ "num-integer",
+ "ryu",
+]
+
+[[package]]
+name = "smithy-types"
+version = "0.0.1"
+source = "git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.19-alpha#74bae11ae1af170e33fb695488f1f514f21884ae"
 dependencies = [
  "chrono",
  "itoa",
