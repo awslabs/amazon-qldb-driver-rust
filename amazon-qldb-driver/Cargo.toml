@@ -17,6 +17,6 @@ rusoto_qldb_session = { version = "0.47.0", default_features = false, features =
 thiserror = "1.0.29"
 anyhow = "1.0.43"
 tracing = "0.1.26"
-tracing-subscriber = { version = "0.2.20", features = ["fmt"] }
+tracing-subscriber = { version = "0.2.21", features = ["fmt"] }
 ion-rs = "0.6.0"
 ion-c-sys = "0.4.11"
