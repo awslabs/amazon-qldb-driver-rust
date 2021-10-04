@@ -33,4 +33,4 @@ http = "0.2.5"
 [dev-dependencies]
 hex-literal = "0.3.3"
 ansi_term = "0.12.1"
-tracing-subscriber = { version = "0.2.21", features = ["fmt"] }
+tracing-subscriber = { version = "0.2.24", features = ["fmt"] }
