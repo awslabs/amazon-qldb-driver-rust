@@ -68,7 +68,7 @@ pub type SendCommandInputOperationRetryAlias = aws_http::AwsErrorRetryPolicy;
 impl SendCommandInput {
     /// Consumes the builder and constructs an Operation<[`SendCommand`](crate::operation::SendCommand)>
     #[allow(clippy::let_and_return)]
-    pub async fn make_operation(
+    pub fn make_operation(
         self,
         _config: &crate::config::Config,
     ) -> std::result::Result<
