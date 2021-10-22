@@ -13,38 +13,38 @@ readme = "README.md"
 targets = ["x86_64-unknown-linux-gnu"]
 [dependencies.aws-endpoint]
 git = "https://github.com/awslabs/aws-sdk-rust"
-tag = "v0.0.20-alpha"
+tag = "v0.0.22-alpha"
 [dependencies.aws-http]
 git = "https://github.com/awslabs/aws-sdk-rust"
-tag = "v0.0.20-alpha"
+tag = "v0.0.22-alpha"
 [dependencies.aws-hyper]
 git = "https://github.com/awslabs/aws-sdk-rust"
-tag = "v0.0.20-alpha"
+tag = "v0.0.22-alpha"
 optional = true
 [dependencies.aws-sig-auth]
 git = "https://github.com/awslabs/aws-sdk-rust"
-tag = "v0.0.20-alpha"
+tag = "v0.0.22-alpha"
 features = ["sign-eventstream"]
 [dependencies.aws-smithy-client]
 git = "https://github.com/awslabs/aws-sdk-rust"
-tag = "v0.0.20-alpha"
+tag = "v0.0.22-alpha"
 optional = true
 [dependencies.aws-smithy-eventstream]
 git = "https://github.com/awslabs/aws-sdk-rust"
-tag = "v0.0.20-alpha"
+tag = "v0.0.22-alpha"
 [dependencies.aws-smithy-http]
 git = "https://github.com/awslabs/aws-sdk-rust"
-tag = "v0.0.20-alpha"
+tag = "v0.0.22-alpha"
 features = ["event-stream"]
 [dependencies.aws-smithy-json]
 git = "https://github.com/awslabs/aws-sdk-rust"
-tag = "v0.0.20-alpha"
+tag = "v0.0.22-alpha"
 [dependencies.aws-smithy-types]
 git = "https://github.com/awslabs/aws-sdk-rust"
-tag = "v0.0.20-alpha"
+tag = "v0.0.22-alpha"
 [dependencies.aws-types]
 git = "https://github.com/awslabs/aws-sdk-rust"
-tag = "v0.0.20-alpha"
+tag = "v0.0.22-alpha"
 [dependencies.bytes]
 version = "1"
 [dependencies.http]
