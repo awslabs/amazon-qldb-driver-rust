@@ -8,29 +8,33 @@ pub mod send_command_input {
     pub struct Builder {
         pub(crate) ledger_name: std::option::Option<std::string::String>,
         pub(crate) command_stream: std::option::Option<
-            smithy_http::event_stream::EventStreamInput<crate::model::CommandStream>,
+            aws_smithy_http::event_stream::EventStreamInput<crate::model::CommandStream>,
         >,
     }
     impl Builder {
+        #[allow(missing_docs)] // documentation missing in model
         pub fn ledger_name(mut self, input: impl Into<std::string::String>) -> Self {
             self.ledger_name = Some(input.into());
             self
         }
+        #[allow(missing_docs)] // documentation missing in model
         pub fn set_ledger_name(mut self, input: std::option::Option<std::string::String>) -> Self {
             self.ledger_name = input;
             self
         }
+        #[allow(missing_docs)] // documentation missing in model
         pub fn command_stream(
             mut self,
-            input: smithy_http::event_stream::EventStreamInput<crate::model::CommandStream>,
+            input: aws_smithy_http::event_stream::EventStreamInput<crate::model::CommandStream>,
         ) -> Self {
             self.command_stream = Some(input);
             self
         }
+        #[allow(missing_docs)] // documentation missing in model
         pub fn set_command_stream(
             mut self,
             input: std::option::Option<
-                smithy_http::event_stream::EventStreamInput<crate::model::CommandStream>,
+                aws_smithy_http::event_stream::EventStreamInput<crate::model::CommandStream>,
             >,
         ) -> Self {
             self.command_stream = input;
@@ -39,15 +43,17 @@ pub mod send_command_input {
         /// Consumes the builder and constructs a [`SendCommandInput`](crate::input::SendCommandInput)
         pub fn build(
             self,
-        ) -> std::result::Result<crate::input::SendCommandInput, smithy_http::operation::BuildError>
-        {
+        ) -> std::result::Result<
+            crate::input::SendCommandInput,
+            aws_smithy_http::operation::BuildError,
+        > {
             Ok(
                 crate::input::SendCommandInput {
                     ledger_name: self.ledger_name
                     ,
                     command_stream: self.command_stream
                         .ok_or(
-                            smithy_http::operation::BuildError::MissingField { field: "command_stream", details: "command_stream was not specified but it is required when building SendCommandInput"}
+                            aws_smithy_http::operation::BuildError::MissingField { field: "command_stream", details: "command_stream was not specified but it is required when building SendCommandInput"}
                         )?
                     ,
                 }
@@ -62,27 +68,27 @@ pub type SendCommandInputOperationRetryAlias = aws_http::AwsErrorRetryPolicy;
 impl SendCommandInput {
     /// Consumes the builder and constructs an Operation<[`SendCommand`](crate::operation::SendCommand)>
     #[allow(clippy::let_and_return)]
-    pub fn make_operation(
-        &self,
+    pub async fn make_operation(
+        self,
         _config: &crate::config::Config,
     ) -> std::result::Result<
-        smithy_http::operation::Operation<
+        aws_smithy_http::operation::Operation<
             crate::operation::SendCommand,
             aws_http::AwsErrorRetryPolicy,
         >,
-        smithy_http::operation::BuildError,
+        aws_smithy_http::operation::BuildError,
     > {
         fn uri_base(
             _input: &crate::input::SendCommandInput,
             output: &mut String,
-        ) -> Result<(), smithy_http::operation::BuildError> {
-            write!(output, "/").expect("formatting should succeed");
+        ) -> Result<(), aws_smithy_http::operation::BuildError> {
+            write!(output, "/SendCommand").expect("formatting should succeed");
             Ok(())
         }
         fn add_headers(
             _input: &crate::input::SendCommandInput,
             mut builder: http::request::Builder,
-        ) -> std::result::Result<http::request::Builder, smithy_http::operation::BuildError>
+        ) -> std::result::Result<http::request::Builder, aws_smithy_http::operation::BuildError>
         {
             if let Some(inner_1) = &_input.ledger_name {
                 let formatted_2 = AsRef::<str>::as_ref(inner_1);
@@ -90,14 +96,14 @@ impl SendCommandInput {
                     use std::convert::TryFrom;
                     let header_value = formatted_2;
                     let header_value = http::header::HeaderValue::try_from(&*header_value)
-                        .map_err(|err| smithy_http::operation::BuildError::InvalidField {
+                        .map_err(|err| aws_smithy_http::operation::BuildError::InvalidField {
                             field: "ledger_name",
                             details: format!(
                                 "`{}` cannot be used as a header value: {}",
                                 &header_value, err
                             ),
                         })?;
-                    builder = builder.header("x-amzn-ledger-name", header_value);
+                    builder = builder.header("LedgerName", header_value);
                 }
             }
             Ok(builder)
@@ -106,7 +112,7 @@ impl SendCommandInput {
         fn update_http_builder(
             input: &crate::input::SendCommandInput,
             builder: http::request::Builder,
-        ) -> std::result::Result<http::request::Builder, smithy_http::operation::BuildError>
+        ) -> std::result::Result<http::request::Builder, aws_smithy_http::operation::BuildError>
         {
             let mut uri = String::new();
             uri_base(input, &mut uri)?;
@@ -116,29 +122,32 @@ impl SendCommandInput {
         #[allow(clippy::unnecessary_wraps)]
         fn request_builder_base(
             input: &crate::input::SendCommandInput,
-        ) -> std::result::Result<http::request::Builder, smithy_http::operation::BuildError>
+        ) -> std::result::Result<http::request::Builder, aws_smithy_http::operation::BuildError>
         {
             let mut builder = update_http_builder(input, http::request::Builder::new())?;
-            builder = smithy_http::header::set_header_if_absent(
+            builder = aws_smithy_http::header::set_header_if_absent(
                 builder,
                 http::header::HeaderName::from_static("content-type"),
-                "application/x-amz-json-1.0",
-            );
-            builder = smithy_http::header::set_header_if_absent(
-                builder,
-                http::header::HeaderName::from_static("x-amz-target"),
-                "QLDBSessionV2.SendCommand",
+                "application/json",
             );
             Ok(builder)
         }
-        let properties = smithy_http::property_bag::SharedPropertyBag::new();
+        let properties = aws_smithy_http::property_bag::SharedPropertyBag::new();
         let request = request_builder_base(&self)?;
-        let body = crate::operation_ser::serialize_operation_crate_operation_send_command(&self)
-            .map_err(|err| smithy_http::operation::BuildError::SerializationError(err.into()))?;
+        let body = {
+            let marshaller = crate::event_stream_serde::CommandStreamMarshaller::new();
+            let signer = _config.new_event_stream_signer(properties.clone());
+            let adapter: aws_smithy_http::event_stream::MessageStreamAdapter<
+                _,
+                crate::error::SendCommandError,
+            > = self.command_stream.into_body_stream(marshaller, signer);
+            let body: aws_smithy_http::body::SdkBody = hyper::Body::wrap_stream(adapter).into();
+            body
+        };
         let request = Self::assemble(request, body);
         #[allow(unused_mut)]
-        let mut request = smithy_http::operation::Request::from_parts(
-            request.map(smithy_http::body::SdkBody::from),
+        let mut request = aws_smithy_http::operation::Request::from_parts(
+            request.map(aws_smithy_http::body::SdkBody::from),
             properties,
         );
         request
@@ -164,25 +173,27 @@ impl SendCommandInput {
         if let Some(region) = &_config.region {
             request.properties_mut().insert(region.clone());
         }
-        aws_auth::set_provider(
+        aws_http::auth::set_provider(
             &mut request.properties_mut(),
             _config.credentials_provider.clone(),
         );
-        let op =
-            smithy_http::operation::Operation::new(request, crate::operation::SendCommand::new())
-                .with_metadata(smithy_http::operation::Metadata::new(
-                    "SendCommand",
-                    "qldbsessionv2",
-                ));
+        let op = aws_smithy_http::operation::Operation::new(
+            request,
+            crate::operation::SendCommand::new(),
+        )
+        .with_metadata(aws_smithy_http::operation::Metadata::new(
+            "SendCommand",
+            "qldbsessionv2",
+        ));
         let op = op.with_retry_policy(aws_http::AwsErrorRetryPolicy::new());
         Ok(op)
     }
     fn assemble(
         mut builder: http::request::Builder,
-        body: smithy_http::body::SdkBody,
-    ) -> http::request::Request<smithy_http::body::SdkBody> {
+        body: aws_smithy_http::body::SdkBody,
+    ) -> http::request::Request<aws_smithy_http::body::SdkBody> {
         if let Some(content_length) = body.content_length() {
-            builder = smithy_http::header::set_header_if_absent(
+            builder = aws_smithy_http::header::set_header_if_absent(
                 builder,
                 http::header::CONTENT_LENGTH,
                 content_length,
@@ -196,10 +207,14 @@ impl SendCommandInput {
     }
 }
 
+#[allow(missing_docs)] // documentation missing in model
 #[non_exhaustive]
 pub struct SendCommandInput {
+    #[allow(missing_docs)] // documentation missing in model
     pub ledger_name: std::option::Option<std::string::String>,
-    pub command_stream: smithy_http::event_stream::EventStreamInput<crate::model::CommandStream>,
+    #[allow(missing_docs)] // documentation missing in model
+    pub command_stream:
+        aws_smithy_http::event_stream::EventStreamInput<crate::model::CommandStream>,
 }
 impl std::fmt::Debug for SendCommandInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
