@@ -1,6 +1,6 @@
 use anyhow::Result;
-use aws_hyper::Client;
-use aws_sdk_qldbsession::Config;
+use aws_hyper::{DynConnector, SmithyConnector};
+use aws_sdk_qldbsessionv2::{Client, Config};
 use bb8::Pool;
 use std::sync::Arc;
 use std::{future::Future, time::Duration};
@@ -9,11 +9,12 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::debug;
 
-use crate::api::{QldbSession, QldbSessionSdk};
-use crate::error::{QldbError, QldbResult};
+use crate::error::{self, QldbError, QldbResult};
 use crate::transaction::TransactionAttempt;
 use crate::{pool::QldbErrorLoggingErrorSink, transaction::TransactionAttemptResult};
-use crate::{pool::QldbSessionManager, retry::default_retry_policy, retry::TransactionRetryPolicy};
+use crate::{
+    pool::QldbSessionV2Manager, retry::default_retry_policy, retry::TransactionRetryPolicy,
+};
 
 pub struct QldbDriverBuilder {
     ledger_name: Option<String>,
@@ -60,19 +61,32 @@ impl QldbDriverBuilder {
     /// Build a `QldbDriver` using the AWS SDK for Rust.
     ///
     /// `sdk_config` will be used to create a configured instance of the SDK.
-    pub async fn sdk_config(self, sdk_config: Config) -> QldbResult<QldbDriver<QldbSessionSdk>> {
-        let hyper = Client::https();
-        let client = QldbSessionSdk::new(hyper, sdk_config);
+    /// Note that this configuration uses the "sdk config" as opposed to the
+    /// QLDB specific config.
+    pub async fn sdk_config(
+        self,
+        sdk_config: &aws_types::config::Config,
+    ) -> QldbResult<QldbDriver<DynConnector>> {
+        let client = Client::new(sdk_config);
         self.build_with_client(client).await
     }
 
-    pub async fn build_with_client<C>(self, client: C) -> QldbResult<QldbDriver<C>>
+    /// Builds a `QldbDriver` using the AWS SDK for Rust.
+    ///
+    /// Note that `config` is the service-specific (QldbSession) config. For
+    /// shared config, see [`sdk_config`].
+    pub async fn config(self, config: Config) -> QldbResult<QldbDriver<DynConnector>> {
+        let client = Client::from_conf(config);
+        self.build_with_client(client).await
+    }
+
+    pub async fn build_with_client<C>(self, client: Client<C>) -> QldbResult<QldbDriver<C>>
     where
-        C: QldbSession + Send + Sync + Clone + 'static,
+        C: SmithyConnector,
     {
-        let ledger_name = self.ledger_name.ok_or(QldbError::UsageError(
-            "ledger_name must be initialized".to_string(),
-        ))?;
+        let ledger_name = self
+            .ledger_name
+            .ok_or(error::usage_error("ledger_name must be initialized"))?;
 
         let transaction_retry_policy = Arc::new(Mutex::new(self.transaction_retry_policy));
 
@@ -82,15 +96,12 @@ impl QldbDriverBuilder {
             .max_size(self.max_concurrent_transactions)
             .connection_timeout(Duration::from_secs(10))
             .error_sink(Box::new(QldbErrorLoggingErrorSink::new()))
-            .build(QldbSessionManager {
-                client: client.clone(),
-                ledger_name: ledger_name.clone(),
-            })
-            .await?;
+            .build(QldbSessionV2Manager::new(client, ledger_name.clone()))
+            .await
+            .map_err(|_| error::todo_stable_error_api())?;
 
         Ok(QldbDriver {
             ledger_name: Arc::new(ledger_name.clone()),
-            client: client.clone(),
             session_pool: Arc::new(session_pool),
             transaction_retry_policy,
         })
@@ -138,11 +149,10 @@ impl QldbDriverBuilder {
 #[derive(Clone)]
 pub struct QldbDriver<C>
 where
-    C: QldbSession + Send + Sync + Clone + 'static,
+    C: SmithyConnector,
 {
-    ledger_name: Arc<String>,
-    client: C,
-    session_pool: Arc<Pool<QldbSessionManager<C>>>,
+    pub ledger_name: Arc<String>,
+    session_pool: Arc<Pool<QldbSessionV2Manager<C>>>,
     transaction_retry_policy: Arc<Mutex<Box<dyn TransactionRetryPolicy + Send + Sync>>>,
 }
 
@@ -157,7 +167,7 @@ pub enum TransactionError {
 
 impl<C> QldbDriver<C>
 where
-    C: QldbSession + Send + Sync + Clone,
+    C: SmithyConnector,
 {
     pub fn ledger_name(&self) -> String {
         (*self.ledger_name).clone()
@@ -180,16 +190,16 @@ where
     pub async fn transact<F, Fut, R>(&self, transaction: F) -> Result<R>
     where
         Fut: Future<Output = Result<TransactionAttemptResult<R>>>,
-        F: Fn(TransactionAttempt<C>) -> Fut,
+        F: Fn(TransactionAttempt) -> Fut,
     {
         let mut attempt_number = 0u32;
 
         loop {
             attempt_number += 1;
 
-            let pooled_session = self.session_pool.get().await?;
+            let mut pooled_session = self.session_pool.get().await?;
 
-            let tx = match TransactionAttempt::start(pooled_session.clone()).await {
+            let tx = match TransactionAttempt::start(&mut pooled_session).await {
                 Ok(tx) => tx,
                 Err(e) => {
                     // FIXME: Include some sort of sleep and attempt cap.

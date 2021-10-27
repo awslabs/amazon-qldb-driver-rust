@@ -1,4 +1,3 @@
-pub mod api;
 pub mod driver;
 pub mod error;
 pub mod execution_stats;
@@ -10,7 +9,6 @@ pub mod transaction;
 
 pub use crate::driver::{QldbDriver, QldbDriverBuilder};
 pub use crate::transaction::{TransactionAttempt, TransactionAttemptResult};
-pub use aws_sdk_qldbsession;
 
 use anyhow::Result;
 

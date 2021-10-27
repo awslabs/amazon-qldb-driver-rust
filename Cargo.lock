@@ -34,7 +34,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "aws-hyper",
- "aws-sdk-qldbsession",
  "aws-sdk-qldbsessionv2",
  "aws-smithy-http",
  "aws-types",
@@ -182,24 +181,6 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
-]
-
-[[package]]
-name = "aws-sdk-qldbsession"
-version = "0.0.22-alpha"
-source = "git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.22-alpha#6c874ba3c63387254ecd00d651fe04c367070132"
-dependencies = [
- "aws-endpoint",
- "aws-http",
- "aws-hyper",
- "aws-sig-auth",
- "aws-smithy-client",
- "aws-smithy-http",
- "aws-smithy-json",
- "aws-smithy-types",
- "aws-types",
- "bytes 1.1.0",
- "http",
 ]
 
 [[package]]

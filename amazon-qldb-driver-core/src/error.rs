@@ -1,6 +1,4 @@
-use aws_sdk_qldbsession::{error, SdkError};
-
-use core::fmt;
+use aws_sdk_qldbsessionv2::model::ResultStream;
 use aws_smithy_http::operation::BuildError;
 use thiserror::Error;
 
@@ -14,10 +12,15 @@ pub enum QldbError {
     IllegalState(String),
     #[error("usage error: {0}")]
     UsageError(String),
-    #[error("unexpected response: {0}")]
-    UnexpectedResponse(String),
-    #[error("communication failure: {0}")]
-    SdkError(#[from] SdkError<error::SendCommandError>),
+    #[error("unexpected response: expected {expected}, got {actual:?}")]
+    UnexpectedResponse {
+        expected: String,
+        actual: ResultStream,
+    },
+    #[error("malformed response: {message}")]
+    MalformedResponse { message: String },
+    #[error("todo")]
+    TodoStableErrorApi,
 }
 
 // Smithy-generated builders could return an error on build. In most cases, this
@@ -32,24 +35,39 @@ impl From<BuildError> for QldbError {
     }
 }
 
-#[derive(Debug)]
-pub struct UnitError;
+pub(crate) fn usage_error<S>(message: S) -> QldbError
+where
+    S: Into<String>,
+{
+    QldbError::UsageError(message.into())
+}
 
-impl fmt::Display for UnitError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "no further informaation")
+pub(crate) fn illegal_state<S>(message: S) -> QldbError
+where
+    S: Into<String>,
+{
+    QldbError::IllegalState(message.into())
+}
+
+pub(crate) fn unexpected_response<S>(expected: S, actual: ResultStream) -> QldbError
+where
+    S: Into<String>,
+{
+    QldbError::UnexpectedResponse {
+        expected: expected.into(),
+        actual,
     }
 }
 
-impl std::error::Error for UnitError {}
-
-#[derive(Debug)]
-pub struct StringError(pub String);
-
-impl fmt::Display for StringError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+pub(crate) fn malformed_response<S>(message: S) -> QldbError
+where
+    S: Into<String>,
+{
+    QldbError::MalformedResponse {
+        message: message.into(),
     }
 }
 
-impl std::error::Error for StringError {}
+pub(crate) fn todo_stable_error_api() -> QldbError {
+    QldbError::TodoStableErrorApi
+}

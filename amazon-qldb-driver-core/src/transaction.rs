@@ -1,12 +1,11 @@
-use crate::api::QldbSession;
-use crate::error::{QldbError, QldbResult};
-use crate::qldb_hash::QldbHash;
-use crate::{
-    api::{QldbSessionApi, TransactionId},
-    execution_stats::ExecutionStats,
-};
-use crate::{ion_compat::ion_hash, pool::QldbHttp1Connection};
+use crate::error::{self, QldbError, QldbResult};
+use crate::execution_stats::ExecutionStats;
+use crate::pool::QldbHttp2Connection;
 use anyhow::Result;
+use aws_sdk_qldbsessionv2::model::{
+    AbortTransactionRequest, CommandStream, CommitTransactionRequest, ExecuteStatementRequest,
+    FetchPageRequest, ResultStream, StartTransactionRequest,
+};
 use bytes::Bytes;
 use ion_c_sys::reader::IonCReaderHandle;
 use ion_c_sys::result::IonCError;
@@ -62,13 +61,14 @@ pub enum TransactionAttemptResult<R> {
     Aborted,
 }
 
-pub struct TransactionAttempt<C>
-where
-    C: QldbSession + Send + Sync + Clone,
-{
-    pooled_session: QldbHttp1Connection<C>,
-    pub id: TransactionId,
-    commit_digest: QldbHash,
+pub struct TransactionAttempt<'pool> {
+    connection: &'pool mut QldbHttp2Connection,
+    /// The id of this transaction attempt. This is a speculative transaction
+    /// id. That is, if the transaction commits, then this id is the id of the
+    /// transaction. However, if the transaction does not commit then it is not
+    /// a valid QLDB transaction id. If the transaction is retired (another
+    /// attempt is made), then a new id will be assigned.
+    pub id: String,
     /// Accumulates stats for this transaction attempt. Repeated calls of this
     /// method may return different results if additional API calls were made.
     /// The stats will include the timing and IO usage for the start and commit
@@ -79,36 +79,37 @@ where
     pub accumulated_execution_stats: ExecutionStats,
 }
 
-impl<C> TransactionAttempt<C>
-where
-    C: QldbSession + Send + Sync + Clone,
-{
+impl<'pool> TransactionAttempt<'pool> {
     pub(crate) async fn start(
-        pooled_session: QldbHttp1Connection<C>,
-    ) -> Result<TransactionAttempt<C>, QldbError> {
+        connection: &'pool mut QldbHttp2Connection,
+    ) -> Result<TransactionAttempt<'pool>, QldbError> {
         let mut accumulated_execution_stats = ExecutionStats::default();
-        let start_result = pooled_session
-            .start_transaction(&pooled_session.session_token())
-            .await?;
+        let resp = connection
+            .send_streaming_command(CommandStream::StartTransaction(
+                StartTransactionRequest::builder().build(),
+            ))
+            .await
+            .map_err(|_| error::todo_stable_error_api())?;
+        let start_result = match resp {
+            ResultStream::StartTransaction(it) => it,
+            it => Err(error::unexpected_response("StartTransaction", it))?,
+        };
         accumulated_execution_stats.accumulate(&start_result);
+
         let id = start_result
             .transaction_id
-            .ok_or(QldbError::UnexpectedResponse(
-                "StartTransaction should always return a transaction_id".into(),
+            .ok_or(error::malformed_response(
+                "StartTransaction did not return a transaction_id",
             ))?;
 
-        let seed_hash = ion_hash(&id);
-        let commit_digest = QldbHash::from_bytes(seed_hash).unwrap();
-        let transaction = TransactionAttempt {
-            pooled_session,
+        Ok(TransactionAttempt {
+            connection,
             id,
-            commit_digest,
             accumulated_execution_stats,
-        };
-        Ok(transaction)
+        })
     }
 
-    pub fn statement<S>(&mut self, statement: S) -> StatementBuilder<'_, C>
+    pub fn statement<S>(&mut self, statement: S) -> StatementBuilder<'pool, '_>
     where
         S: Into<String>,
     {
@@ -129,18 +130,22 @@ where
         &mut self,
         statement: Statement,
     ) -> QldbResult<StatementResults> {
-        let statement_hash = QldbHash::from_bytes(ion_hash(&statement.partiql)).unwrap();
-        self.commit_digest = self.commit_digest.dot(&statement_hash);
-
         let mut execution_stats = ExecutionStats::default();
-        let execute_result = self
-            .pooled_session
-            .execute_statement(
-                &self.pooled_session.session_token(),
-                &self.id,
-                statement.partiql.clone(),
-            )
-            .await?;
+        let resp = self
+            .connection
+            .send_streaming_command(CommandStream::ExecuteStatement(
+                ExecuteStatementRequest::builder()
+                    .transaction_id(&self.id)
+                    .statement(&statement.partiql)
+                    .build(),
+            ))
+            .await
+            .map_err(|_| error::todo_stable_error_api())?;
+
+        let execute_result = match resp {
+            ResultStream::ExecuteStatement(it) => it,
+            it => Err(error::unexpected_response("ExecuteStatement", it))?,
+        };
         execution_stats.accumulate(&execute_result);
 
         let mut values = vec![];
@@ -156,22 +161,29 @@ where
                     let bytes = match (holder.ion_text, holder.ion_binary) {
                         (None, Some(bytes)) => bytes,
                         (Some(_txt), None) => unimplemented!(), // TextIonCursor::new(txt),
-                        _ => Err(QldbError::UnexpectedResponse(
-                            "expected only one of ion binary or text".to_string(),
+                        _ => Err(error::malformed_response(
+                            "expected only one of ion binary or text",
                         ))?,
                     };
                     values.push(Bytes::from(bytes.into_inner()));
                 }
 
                 if let Some(next_page_token) = page.next_page_token {
-                    let fetch_page_result = self
-                        .pooled_session
-                        .fetch_page(
-                            &self.pooled_session.session_token(),
-                            &self.id,
-                            next_page_token,
-                        )
-                        .await?;
+                    let resp = self
+                        .connection
+                        .send_streaming_command(CommandStream::FetchPage(
+                            FetchPageRequest::builder()
+                                .transaction_id(&self.id)
+                                .next_page_token(&next_page_token)
+                                .build(),
+                        ))
+                        .await
+                        .map_err(|_| error::todo_stable_error_api())?;
+
+                    let fetch_page_result = match resp {
+                        ResultStream::FetchPage(it) => it,
+                        it => Err(error::unexpected_response("FetchPage", it))?,
+                    };
 
                     execution_stats.accumulate(&fetch_page_result);
 
@@ -189,40 +201,37 @@ where
 
     pub async fn commit<R>(mut self, user_data: R) -> Result<TransactionAttemptResult<R>> {
         debug!(id = &self.id[..], "transaction will be committed");
-        let res = self
-            .pooled_session
-            .commit_transaction(
-                &self.pooled_session.session_token(),
-                self.id.clone(),
-                self.commit_digest.bytes(),
-            )
-            .await?;
+        let resp = self
+            .connection
+            .send_streaming_command(CommandStream::CommitTransaction(
+                CommitTransactionRequest::builder()
+                    .transaction_id(&self.id)
+                    .build(),
+            ))
+            .await
+            .map_err(|_| error::todo_stable_error_api())?;
+
+        let commit_result = match resp {
+            ResultStream::CommitTransaction(it) => it,
+            it => Err(error::unexpected_response("CommitTransaction", it))?,
+        };
 
         // If we get a successful commit, check some invariants. Otherwise, the
         // error must be handled by the caller. In most cases, this should be
         // the driver which may retry the transaction.
-        if let Some(ref id) = res.transaction_id {
+        if let Some(ref id) = commit_result.transaction_id {
             if id != &self.id {
-                Err(QldbError::IllegalState(format!(
+                Err(error::illegal_state(format!(
                     "transaction {} response returned a different id: {:#?}",
-                    self.id, res,
+                    self.id, id,
                 )))?
             }
         }
 
-        if let Some(ref bytes) = res.commit_digest {
-            if bytes.as_ref() != &self.commit_digest.bytes()[..] {
-                Err(QldbError::IllegalState(format!(
-                    "transaction {} response returned a different commit digest: {:#?}",
-                    self.id, res,
-                )))?
-            }
-        }
-
-        self.accumulated_execution_stats.accumulate(&res);
+        self.accumulated_execution_stats.accumulate(&commit_result);
 
         Ok(TransactionAttemptResult::Committed {
-            commit_execution_stats: ExecutionStats::from_api(res),
+            commit_execution_stats: ExecutionStats::from_api(commit_result),
             user_data,
         })
     }
@@ -231,39 +240,36 @@ where
     // keep the type consistent with `commit`.
     pub async fn abort<R>(mut self) -> Result<TransactionAttemptResult<R>> {
         debug!(id = &self.id[..], "transaction will be aborted");
-        match self
-            .pooled_session
-            .abort_transaction(&self.pooled_session.session_token())
+        let resp = self
+            .connection
+            .send_streaming_command(CommandStream::AbortTransaction(
+                AbortTransactionRequest::builder().build(),
+            ))
             .await
-        {
-            Ok(r) => self.accumulated_execution_stats.accumulate(&r),
-            Err(e) => {
-                debug!(
-                    error = %e,
-                    id = &self.id[..],
-                    "ignoring failure to abort tx"
-                );
-                self.pooled_session.notify_invalid();
-            }
+            .map_err(|_| error::todo_stable_error_api())?;
+
+        let abort_result = match resp {
+            ResultStream::AbortTransaction(it) => it,
+            it => Err(error::unexpected_response("AbortTransaction", it))?,
         };
+
+        // TODO: Should we ignore abort failures?
+        self.accumulated_execution_stats.accumulate(&abort_result);
 
         Ok(TransactionAttemptResult::Aborted)
     }
 }
 
-pub struct StatementBuilder<'tx, C>
-where
-    C: QldbSession + Send + Sync + Clone,
-{
-    attempt: &'tx mut TransactionAttempt<C>,
+pub struct StatementBuilder<'pool, 'tx> {
+    attempt: &'tx mut TransactionAttempt<'pool>,
     statement: Statement,
 }
 
-impl<'tx, C> StatementBuilder<'tx, C>
-where
-    C: QldbSession + Send + Sync + Clone,
-{
-    fn new(attempt: &'tx mut TransactionAttempt<C>, partiql: String) -> StatementBuilder<'tx, C> {
+impl<'pool, 'tx> StatementBuilder<'pool, 'tx> {
+    fn new(
+        attempt: &'tx mut TransactionAttempt<'pool>,
+        partiql: String,
+    ) -> StatementBuilder<'pool, 'tx> {
         StatementBuilder {
             attempt,
             statement: Statement {
@@ -277,7 +283,7 @@ where
     // 1. need an IonElement so we can hash it. in the future, we hope to remove this as a requirement
     // 2. perhaps we want an in-crate trait for coherency reasons
     // TODO: make public when ready
-    fn param<B>(mut self, param: B) -> StatementBuilder<'tx, C>
+    fn param<B>(mut self, param: B) -> StatementBuilder<'pool, 'tx>
     where
         B: Into<Bytes>,
     {
