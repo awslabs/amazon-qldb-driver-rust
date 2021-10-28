@@ -197,6 +197,16 @@ where
         loop {
             attempt_number += 1;
 
+            // Note that `PooledConnection` uses the `Drop` trait to hand the
+            // connection back to the pool. It'd be really nice to hand the
+            // owned connection to the attempt such that the attempt naturally
+            // handed the connection back. However, this requires plumbing the
+            // manager's generics down, which is ugly, especially since
+            // `TransactionAttempt` is customer-facing. Instead, we manually
+            // discard the connection asap. This isn't a correctness risk (since
+            // Rust will guarantee we do it at some point), but putting the
+            // connection back in the pool before sleeping will probably be
+            // beneficial.
             let mut pooled_session = self.session_pool.get().await?;
 
             let tx = match TransactionAttempt::start(&mut pooled_session).await {
@@ -246,6 +256,10 @@ where
                     }
                 }
             };
+
+            // See above note. We put the connection back in the pool before
+            // adding any delay.
+            drop(pooled_session);
 
             let retry_ins = {
                 let policy = self.transaction_retry_policy.lock().await;
