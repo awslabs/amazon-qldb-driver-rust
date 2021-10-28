@@ -3,7 +3,6 @@ pub mod error;
 pub mod execution_stats;
 pub mod ion_compat;
 pub mod pool;
-pub mod qldb_hash;
 pub mod retry;
 pub mod transaction;
 
