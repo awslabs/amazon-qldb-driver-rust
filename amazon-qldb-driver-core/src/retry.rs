@@ -1,7 +1,6 @@
 use rand::thread_rng;
 use rand::Rng;
 use std::{cmp::min, time::Duration};
-use tracing::debug;
 use tracing::error;
 
 use aws_sdk_qldbsessionv2::error::SendCommandError;
@@ -122,24 +121,7 @@ impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
                 // have been sent. In QLDB, the commit digest protects
                 // against a duplicate statement being sent.
                 SdkError::DispatchFailure(_) => true,
-                SdkError::ResponseError { raw, .. } => match raw {
-                    aws_smithy_http::event_stream::RawMessage::Decoded(decoded) => {
-                        // FIXME: Do 500s come back?
-                        // match decoded.headers().status().as_u16() {
-                        //     500 | 503 => true,
-                        //     _ => false,
-                        // }
-                        true
-                    }
-                    aws_smithy_http::event_stream::RawMessage::Invalid(_) => {
-                        debug!("invalid message, will not retry");
-                        false
-                    }
-                    _ => {
-                        debug!("unexpected response, will not retry");
-                        false
-                    }
-                },
+                SdkError::ResponseError { .. } => true,
             },
             SendStreamingCommandError::ChannelClosed => true,
         };

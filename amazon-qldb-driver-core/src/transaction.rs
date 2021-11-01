@@ -9,7 +9,6 @@ use std::convert::TryFrom;
 use thiserror::Error;
 use tracing::debug;
 
-use crate::error::BoxError;
 use crate::execution_stats::ExecutionStats;
 use crate::pool::{QldbHttp2Connection, SendStreamingCommandError};
 
@@ -54,18 +53,34 @@ impl StatementResults {
     }
 }
 
-/// Internal error type that represents a failure calling one of the methods on
+/// Represents a failure in a call to [`QldbDriver.transact`]. Failures could be
+/// due to user code (e.g. deserializing a QLDB document into a local type), or
+/// from interacting with the QLDB service.
+#[derive(Debug, Error)]
+pub enum TransactAttemptError<E>
+where
+    E: std::error::Error + 'static,
+{
+    #[error("{0}")]
+    User(#[from] E),
+    #[error("{0}")]
+    Qldb(TransactionAttemptError),
+}
+
+/// Error type that represents a failure calling one of the methods on
 /// [`TransactionAttempt`]. This doesn't not meant the attempt is failed.
 ///
 /// We have this type so that we can separate out failures at the transport
 /// layer (e.g. the connection failed) from users sending bad queries.
 #[derive(Debug, Error)]
 pub enum TransactionAttemptError {
-    #[error("{0}")]
+    /// Represents a failure to talk to QLDB, such as a network error or lack of
+    /// permissions.
+    #[error("communication error: {0}")]
     CommunicationError(#[from] CommunicationError),
 
-    #[error("user error: {0}")]
-    TodoStableApi(#[from] BoxError),
+    #[error("invalid statement: {message}")]
+    InvalidPartiql { message: String },
 }
 
 /// Various ways client-server interaction can fail. This error is ultimately
@@ -83,13 +98,6 @@ pub enum CommunicationError {
 
     #[error("malformed response: {message}")]
     MalformedResponse { message: String },
-}
-
-// FIXME: Does the fact that this exists mean I got the error hierarchy wrong?
-impl From<SendStreamingCommandError> for TransactionAttemptError {
-    fn from(err: SendStreamingCommandError) -> Self {
-        TransactionAttemptError::CommunicationError(CommunicationError::Transport(err))
-    }
 }
 
 pub(crate) fn unexpected_response<S>(expected: S, actual: ResultStream) -> CommunicationError
@@ -192,7 +200,7 @@ impl<'pool> TransactionAttempt<'pool> {
     async fn execute_statement_internal(
         &mut self,
         statement: Statement,
-    ) -> Result<StatementResults, TransactionAttemptError> {
+    ) -> Result<StatementResults, CommunicationError> {
         let mut execution_stats = ExecutionStats::default();
         let resp = self
             .connection
@@ -357,11 +365,42 @@ impl<'pool, 'tx> StatementBuilder<'pool, 'tx> {
 
     async fn execute(self) -> Result<StatementResults, TransactionAttemptError> {
         let StatementBuilder { attempt, statement } = self;
-        attempt.execute_statement_internal(statement).await
+        attempt
+            .execute_statement_internal(statement)
+            .await
+            .map_err(|err| map_stable_err(err))
     }
 }
 
 struct Statement {
     partiql: String,
     params: Vec<Bytes>,
+}
+
+/// Communication errors (errors sending a request, errors received from the
+/// service) are represented by our "transport" layer (the AWS SDK). We want to
+/// map those to in-crate errors that users can program against regardless of
+/// how the SDK evolves.
+fn map_stable_err(err: CommunicationError) -> TransactionAttemptError {
+    if let CommunicationError::Transport(SendStreamingCommandError::RecvError(
+        aws_hyper::SdkError::ServiceError { err, .. },
+    )) = &err
+    {
+        match err.kind {
+            // TODO: I think this demonstrates that BadRequestException is not a
+            // good exception type! We need to carve out "the API request is
+            // bad" from "the Partiql is bad and should not be retried" from
+            // "the statement can't run now but you should retry".
+            aws_sdk_qldbsessionv2::error::SendCommandErrorKind::BadRequestException(
+                ref exception,
+            ) => {
+                return TransactionAttemptError::InvalidPartiql {
+                    message: exception.message().unwrap_or("").into(),
+                };
+            }
+            _ => {}
+        };
+    }
+
+    TransactionAttemptError::CommunicationError(err)
 }

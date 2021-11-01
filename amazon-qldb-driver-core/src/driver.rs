@@ -10,7 +10,9 @@ use tracing::{debug, error};
 
 use crate::error::{self, BoxError, QldbResult};
 use crate::pool::SendStreamingCommandError;
-use crate::transaction::{CommunicationError, TransactionAttempt, TransactionAttemptError};
+use crate::transaction::{
+    CommunicationError, TransactAttemptError, TransactionAttempt, TransactionAttemptError,
+};
 use crate::{pool::QldbErrorLoggingErrorSink, transaction::TransactionDisposition};
 use crate::{
     pool::QldbSessionV2Manager, retry::default_retry_policy, retry::TransactionRetryPolicy,
@@ -157,7 +159,18 @@ where
 }
 
 #[derive(Debug, Error)]
-pub enum TransactionError {
+pub enum TransactionError<E>
+where
+    E: std::error::Error + 'static,
+{
+    /// Error defined by user code.
+    #[error("user error: {0}")]
+    UserError(E),
+
+    /// Invalid Partiql statement, or some other problem that cannot be retried.
+    #[error("usage error: {message}")]
+    UsageError { message: String },
+
     /// Unable to connect to the configured QLDB ledger. This might be because
     /// of a configuration error (e.g. the ledger does not exist, the specified
     /// region is incorrect), a connection error (unable to reach the QLDB
@@ -182,6 +195,23 @@ pub enum TransactionError {
     RuntimeError(#[from] BoxError),
 }
 
+/// De-nests attempt errors into top level errors.
+impl<E> From<TransactionAttemptError> for TransactionError<E>
+where
+    E: std::error::Error + 'static,
+{
+    fn from(err: TransactionAttemptError) -> Self {
+        match err {
+            TransactionAttemptError::CommunicationError(it) => TransactionError::ConnectionError {
+                cause: Box::new(it),
+            },
+            TransactionAttemptError::InvalidPartiql { message } => {
+                TransactionError::UsageError { message }
+            }
+        }
+    }
+}
+
 impl<C> QldbDriver<C>
 where
     C: SmithyConnector,
@@ -204,10 +234,11 @@ where
     /// closure! You should consider code running inside the closure as seeing
     /// speculative results that are only confirmed once the transaction
     /// commits.
-    pub async fn transact<F, Fut, R>(&self, transaction: F) -> Result<R, TransactionError>
+    pub async fn transact<F, Fut, R, E>(&self, transaction: F) -> Result<R, TransactionError<E>>
     where
-        Fut: Future<Output = Result<TransactionDisposition<R>, BoxError>>,
+        Fut: Future<Output = Result<TransactionDisposition<R>, TransactAttemptError<E>>>,
         F: Fn(TransactionAttempt) -> Fut,
+        E: std::error::Error + 'static,
     {
         let mut attempt_number = 0u32;
 
@@ -263,22 +294,20 @@ where
             let comm_err = match transaction(tx).await {
                 Ok(TransactionDisposition::Committed { user_data, .. }) => return Ok(user_data),
                 Ok(TransactionDisposition::Aborted) => Err(TransactionError::Aborted)?,
-                Err(e) => {
+                Err(err) => {
                     debug!(
-                        error = %e,
+                        error = %err,
                         id = &tx_id[..],
                         "transaction failed with error"
                     );
-
-                    match e.downcast::<TransactionAttemptError>() {
-                        Ok(err) => match *err {
+                    match err {
+                        TransactAttemptError::User(err) => {
+                            return Err(TransactionError::UserError(err))
+                        }
+                        TransactAttemptError::Qldb(attempt) => match attempt {
                             TransactionAttemptError::CommunicationError(it) => it,
-                            TransactionAttemptError::TodoStableApi(it) => Err(it)?,
+                            _ => Err(attempt)?,
                         },
-                        // This branch means the transaction block failed with a
-                        // non-QldbError. This means something unrelated to QLDB
-                        // went wrong. We don't retry on arbitrary user errors.
-                        Err(other) => Err(other)?,
                     }
                 }
             };
