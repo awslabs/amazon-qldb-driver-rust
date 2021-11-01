@@ -1,7 +1,3 @@
-use crate::error::{self, QldbError, QldbResult};
-use crate::execution_stats::ExecutionStats;
-use crate::pool::QldbHttp2Connection;
-use anyhow::Result;
 use aws_sdk_qldbsessionv2::model::{
     AbortTransactionRequest, CommandStream, CommitTransactionRequest, ExecuteStatementRequest,
     FetchPageRequest, ResultStream, StartTransactionRequest,
@@ -10,7 +6,12 @@ use bytes::Bytes;
 use ion_c_sys::reader::IonCReaderHandle;
 use ion_c_sys::result::IonCError;
 use std::convert::TryFrom;
+use thiserror::Error;
 use tracing::debug;
+
+use crate::error::BoxError;
+use crate::execution_stats::ExecutionStats;
+use crate::pool::{QldbHttp2Connection, SendStreamingCommandError};
 
 /// The results of executing a statement.
 ///
@@ -53,7 +54,64 @@ impl StatementResults {
     }
 }
 
-pub enum TransactionAttemptResult<R> {
+/// Internal error type that represents a failure calling one of the methods on
+/// [`TransactionAttempt`]. This doesn't not meant the attempt is failed.
+///
+/// We have this type so that we can separate out failures at the transport
+/// layer (e.g. the connection failed) from users sending bad queries.
+#[derive(Debug, Error)]
+pub enum TransactionAttemptError {
+    #[error("{0}")]
+    CommunicationError(#[from] CommunicationError),
+
+    #[error("user error: {0}")]
+    TodoStableApi(#[from] BoxError),
+}
+
+/// Various ways client-server interaction can fail. This error is ultimately
+/// used by the [`retry`] module.
+#[derive(Debug, Error)]
+pub enum CommunicationError {
+    #[error("{0}")]
+    Transport(#[from] SendStreamingCommandError),
+
+    #[error("unexpected response: expected {expected}, got {actual:?}")]
+    UnexpectedResponse {
+        expected: String,
+        actual: ResultStream,
+    },
+
+    #[error("malformed response: {message}")]
+    MalformedResponse { message: String },
+}
+
+// FIXME: Does the fact that this exists mean I got the error hierarchy wrong?
+impl From<SendStreamingCommandError> for TransactionAttemptError {
+    fn from(err: SendStreamingCommandError) -> Self {
+        TransactionAttemptError::CommunicationError(CommunicationError::Transport(err))
+    }
+}
+
+pub(crate) fn unexpected_response<S>(expected: S, actual: ResultStream) -> CommunicationError
+where
+    S: Into<String>,
+{
+    CommunicationError::UnexpectedResponse {
+        expected: expected.into(),
+        actual,
+    }
+}
+
+pub(crate) fn malformed_response<S>(message: S) -> CommunicationError
+where
+    S: Into<String>,
+{
+    CommunicationError::MalformedResponse {
+        message: message.into(),
+    }
+}
+
+pub enum TransactionDisposition<R> {
     Committed {
         commit_execution_stats: ExecutionStats,
         user_data: R,
@@ -61,7 +119,12 @@ pub enum TransactionAttemptResult<R> {
     Aborted,
 }
 
+/// QLDB uses Optimistic Concurrency Control. Transactions are speculative until
+/// committed (may be rejected due to interference). This "attempt" at a
+/// transaction may be an actual transaction if [`TransactionAttempt::commit`]
+/// succeeds!
 pub struct TransactionAttempt<'pool> {
+    /// A pool connection that we'll send our commands down.
     connection: &'pool mut QldbHttp2Connection,
     /// The id of this transaction attempt. This is a speculative transaction
     /// id. That is, if the transaction commits, then this id is the id of the
@@ -82,25 +145,22 @@ pub struct TransactionAttempt<'pool> {
 impl<'pool> TransactionAttempt<'pool> {
     pub(crate) async fn start(
         connection: &'pool mut QldbHttp2Connection,
-    ) -> Result<TransactionAttempt<'pool>, QldbError> {
+    ) -> Result<TransactionAttempt<'pool>, CommunicationError> {
         let mut accumulated_execution_stats = ExecutionStats::default();
         let resp = connection
             .send_streaming_command(CommandStream::StartTransaction(
                 StartTransactionRequest::builder().build(),
             ))
-            .await
-            .map_err(|_| error::todo_stable_error_api())?;
+            .await?;
         let start_result = match resp {
             ResultStream::StartTransaction(it) => it,
-            it => Err(error::unexpected_response("StartTransaction", it))?,
+            it => Err(unexpected_response("StartTransaction", it))?,
         };
         accumulated_execution_stats.accumulate(&start_result);
 
-        let id = start_result
-            .transaction_id
-            .ok_or(error::malformed_response(
-                "StartTransaction did not return a transaction_id",
-            ))?;
+        let id = start_result.transaction_id.ok_or(malformed_response(
+            "StartTransaction did not return a transaction_id",
+        ))?;
 
         Ok(TransactionAttempt {
             connection,
@@ -118,7 +178,10 @@ impl<'pool> TransactionAttempt<'pool> {
 
     /// Send a statement without any parameters. For example, this could be used
     /// to create a table where the name is already sanitized.
-    pub async fn execute_statement<S>(&mut self, partiql: S) -> Result<StatementResults, QldbError>
+    pub async fn execute_statement<S>(
+        &mut self,
+        partiql: S,
+    ) -> Result<StatementResults, TransactionAttemptError>
     where
         S: Into<String>,
     {
@@ -129,7 +192,7 @@ impl<'pool> TransactionAttempt<'pool> {
     async fn execute_statement_internal(
         &mut self,
         statement: Statement,
-    ) -> QldbResult<StatementResults> {
+    ) -> Result<StatementResults, TransactionAttemptError> {
         let mut execution_stats = ExecutionStats::default();
         let resp = self
             .connection
@@ -139,12 +202,11 @@ impl<'pool> TransactionAttempt<'pool> {
                     .statement(&statement.partiql)
                     .build(),
             ))
-            .await
-            .map_err(|_| error::todo_stable_error_api())?;
+            .await?;
 
         let execute_result = match resp {
             ResultStream::ExecuteStatement(it) => it,
-            it => Err(error::unexpected_response("ExecuteStatement", it))?,
+            it => Err(unexpected_response("ExecuteStatement", it))?,
         };
         execution_stats.accumulate(&execute_result);
 
@@ -161,7 +223,7 @@ impl<'pool> TransactionAttempt<'pool> {
                     let bytes = match (holder.ion_text, holder.ion_binary) {
                         (None, Some(bytes)) => bytes,
                         (Some(_txt), None) => unimplemented!(), // TextIonCursor::new(txt),
-                        _ => Err(error::malformed_response(
+                        _ => Err(malformed_response(
                             "expected only one of ion binary or text",
                         ))?,
                     };
@@ -177,12 +239,11 @@ impl<'pool> TransactionAttempt<'pool> {
                                 .next_page_token(&next_page_token)
                                 .build(),
                         ))
-                        .await
-                        .map_err(|_| error::todo_stable_error_api())?;
+                        .await?;
 
                     let fetch_page_result = match resp {
                         ResultStream::FetchPage(it) => it,
-                        it => Err(error::unexpected_response("FetchPage", it))?,
+                        it => Err(unexpected_response("FetchPage", it))?,
                     };
 
                     execution_stats.accumulate(&fetch_page_result);
@@ -199,7 +260,12 @@ impl<'pool> TransactionAttempt<'pool> {
         Ok(StatementResults::new(values, execution_stats))
     }
 
-    pub async fn commit<R>(mut self, user_data: R) -> Result<TransactionAttemptResult<R>> {
+    /// Attempt to commit this transaction. If the commit succeeds, `user_data`
+    /// will be returned.
+    pub async fn commit<R>(
+        mut self,
+        user_data: R,
+    ) -> Result<TransactionDisposition<R>, CommunicationError> {
         debug!(id = &self.id[..], "transaction will be committed");
         let resp = self
             .connection
@@ -208,12 +274,11 @@ impl<'pool> TransactionAttempt<'pool> {
                     .transaction_id(&self.id)
                     .build(),
             ))
-            .await
-            .map_err(|_| error::todo_stable_error_api())?;
+            .await?;
 
         let commit_result = match resp {
             ResultStream::CommitTransaction(it) => it,
-            it => Err(error::unexpected_response("CommitTransaction", it))?,
+            it => Err(unexpected_response("CommitTransaction", it))?,
         };
 
         // If we get a successful commit, check some invariants. Otherwise, the
@@ -221,7 +286,7 @@ impl<'pool> TransactionAttempt<'pool> {
         // the driver which may retry the transaction.
         if let Some(ref id) = commit_result.transaction_id {
             if id != &self.id {
-                Err(error::illegal_state(format!(
+                Err(malformed_response(format!(
                     "transaction {} response returned a different id: {:#?}",
                     self.id, id,
                 )))?
@@ -230,33 +295,32 @@ impl<'pool> TransactionAttempt<'pool> {
 
         self.accumulated_execution_stats.accumulate(&commit_result);
 
-        Ok(TransactionAttemptResult::Committed {
+        Ok(TransactionDisposition::Committed {
             commit_execution_stats: ExecutionStats::from_api(commit_result),
             user_data,
         })
     }
 
-    // Always returns `Ok` even though the signature says `Result`. This is to
-    // keep the type consistent with `commit`.
-    pub async fn abort<R>(mut self) -> Result<TransactionAttemptResult<R>> {
+    /// Attempts to abort this transaction.
+    // TODO: Abort failures should close the connection.
+    pub async fn abort<R>(mut self) -> Result<TransactionDisposition<R>, CommunicationError> {
         debug!(id = &self.id[..], "transaction will be aborted");
         let resp = self
             .connection
             .send_streaming_command(CommandStream::AbortTransaction(
                 AbortTransactionRequest::builder().build(),
             ))
-            .await
-            .map_err(|_| error::todo_stable_error_api())?;
+            .await?;
 
         let abort_result = match resp {
             ResultStream::AbortTransaction(it) => it,
-            it => Err(error::unexpected_response("AbortTransaction", it))?,
+            it => Err(unexpected_response("AbortTransaction", it))?,
         };
 
         // TODO: Should we ignore abort failures?
         self.accumulated_execution_stats.accumulate(&abort_result);
 
-        Ok(TransactionAttemptResult::Aborted)
+        Ok(TransactionDisposition::Aborted)
     }
 }
 
@@ -291,7 +355,7 @@ impl<'pool, 'tx> StatementBuilder<'pool, 'tx> {
         self
     }
 
-    async fn execute(self) -> QldbResult<StatementResults> {
+    async fn execute(self) -> Result<StatementResults, TransactionAttemptError> {
         let StatementBuilder { attempt, statement } = self;
         attempt.execute_statement_internal(statement).await
     }

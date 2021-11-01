@@ -1,10 +1,14 @@
-use crate::error::QldbError;
-// use aws_sdk_qldbsessionv2::error::SendCommandError;
-// use aws_sdk_qldbsessionv2::error::SendCommandErrorKind;
-// use aws_sdk_qldbsessionv2::SdkError;
 use rand::thread_rng;
 use rand::Rng;
 use std::{cmp::min, time::Duration};
+use tracing::debug;
+use tracing::error;
+
+use aws_sdk_qldbsessionv2::error::SendCommandError;
+use aws_sdk_qldbsessionv2::error::SendCommandErrorKind;
+use aws_sdk_qldbsessionv2::SdkError;
+
+use crate::pool::SendStreamingCommandError;
 
 pub fn default_retry_policy() -> impl TransactionRetryPolicy {
     ExponentialBackoffJitterTransactionRetryPolicy::default()
@@ -38,14 +42,18 @@ impl RetryInstructions {
 /// A retry policy receives an `error` and the `attempt_number` and returns true/false based on whether the driver should retry or not. The function [`on_err`] is marked `async` to allow
 /// implementations to model features such as backoff-jitter without blocking the runtime.
 pub trait TransactionRetryPolicy {
-    fn on_err(&self, error: &QldbError, attempt_number: u32) -> RetryInstructions;
+    fn on_err(&self, error: &SendStreamingCommandError, attempt_number: u32) -> RetryInstructions;
 }
 
 /// Don't try this at home.
 pub struct NeverRetryPolicy {}
 
 impl TransactionRetryPolicy for NeverRetryPolicy {
-    fn on_err(&self, _error: &QldbError, _attempt_number: u32) -> RetryInstructions {
+    fn on_err(
+        &self,
+        _error: &SendStreamingCommandError,
+        _attempt_number: u32,
+    ) -> RetryInstructions {
         RetryInstructions::dont()
     }
 }
@@ -78,47 +86,69 @@ impl Default for ExponentialBackoffJitterTransactionRetryPolicy {
 }
 
 impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
-    fn on_err(&self, error: &QldbError, attempt_number: u32) -> RetryInstructions {
-        match error {
-            // QldbError::SdkError(e) => {
-            //     let should_retry = match &e {
-            //         SdkError::ServiceError {
-            //             err: SendCommandError { kind, .. },
-            //             ..
-            //         } => match kind {
-            //             SendCommandErrorKind::BadRequestException(_) => false,
-            //             SendCommandErrorKind::InvalidSessionException(_) => true,
-            //             SendCommandErrorKind::LimitExceededException(_) => false,
-            //             SendCommandErrorKind::OccConflictException(_) => true,
-            //             SendCommandErrorKind::RateExceededException(_) => false,
-            //             SendCommandErrorKind::CapacityExceededException(_) => true,
-            //             SendCommandErrorKind::Unhandled(_) => false,
-            //             _ => false,
-            //         },
-            //         // Construction failures mean that the sdk has rejected the
-            //         // request shape (e.g. violating client-side constraints).
-            //         // There is no point retrying, since the sdk will simply
-            //         // reject again!
-            //         SdkError::ConstructionFailure(_) => false,
-            //         // We retry dispatch failures even though the request *may*
-            //         // have been sent. In QLDB, the commit digest protects
-            //         // against a duplicate statement being sent.
-            //         SdkError::DispatchFailure(_) => true,
-            //         SdkError::ResponseError { raw, .. } => match raw.http().status().as_u16() {
-            //             500 | 503 => true,
-            //             _ => false,
-            //         },
-            //     };
+    fn on_err(&self, error: &SendStreamingCommandError, attempt_number: u32) -> RetryInstructions {
+        let should_retry = match error {
+            SendStreamingCommandError::SendError(err) => {
+                if err.is_full() {
+                    // At the time of writing, eventstreaming is being used in
+                    // request-response style, i.e. the underlying channel is
+                    // bounded to a single inflight request. As a result, the
+                    // send channel being full represents a bug.
+                    // FIXME: close the connection
+                    error!("send channel is full, this should never happen");
+                    return RetryInstructions::dont();
+                }
 
-            //     if !should_retry || attempt_number > self.max_attempts {
-            //         return RetryInstructions::dont();
-            //     } else {
-            //         let delay =
-            //             exponential_backoff_with_jitter(self.base, self.cap, attempt_number);
-            //         return RetryInstructions::after(Duration::from_millis(delay as u64));
-            //     }
-            // }
-            _ => return RetryInstructions::dont(),
+                err.is_disconnected()
+            }
+            SendStreamingCommandError::RecvError(err) => match err {
+                SdkError::ServiceError {
+                    err: SendCommandError { kind, .. },
+                    ..
+                } => match kind {
+                    SendCommandErrorKind::BadRequestException(_) => false,
+                    SendCommandErrorKind::LimitExceededException(_) => true,
+                    SendCommandErrorKind::RateExceededException(_) => true,
+                    SendCommandErrorKind::CapacityExceededException(_) => true,
+                    SendCommandErrorKind::Unhandled(_) => false,
+                    _ => false,
+                },
+                // Construction failures mean that the sdk has rejected the
+                // request shape (e.g. violating client-side constraints).
+                // There is no point retrying, since the sdk will simply
+                // reject again!
+                SdkError::ConstructionFailure(_) => false,
+                // We retry dispatch failures even though the request *may*
+                // have been sent. In QLDB, the commit digest protects
+                // against a duplicate statement being sent.
+                SdkError::DispatchFailure(_) => true,
+                SdkError::ResponseError { raw, .. } => match raw {
+                    aws_smithy_http::event_stream::RawMessage::Decoded(decoded) => {
+                        // FIXME: Do 500s come back?
+                        // match decoded.headers().status().as_u16() {
+                        //     500 | 503 => true,
+                        //     _ => false,
+                        // }
+                        true
+                    }
+                    aws_smithy_http::event_stream::RawMessage::Invalid(_) => {
+                        debug!("invalid message, will not retry");
+                        false
+                    }
+                    _ => {
+                        debug!("unexpected response, will not retry");
+                        false
+                    }
+                },
+            },
+            SendStreamingCommandError::ChannelClosed => true,
+        };
+
+        if !should_retry || attempt_number > self.max_attempts {
+            RetryInstructions::dont()
+        } else {
+            let delay = exponential_backoff_with_jitter(self.base, self.cap, attempt_number);
+            RetryInstructions::after(Duration::from_millis(delay as u64))
         }
     }
 }

@@ -1,22 +1,22 @@
 use async_trait::async_trait;
-use aws_hyper::SmithyConnector;
+use aws_hyper::{SdkError, SmithyConnector};
 use aws_sdk_qldbsessionv2::{
     error::SendCommandError,
     model::{CommandStream, ResultStream},
     output::SendCommandOutput,
     Client,
 };
-use aws_smithy_http::event_stream::BoxError;
+use aws_smithy_http::event_stream::{BoxError, RawMessage};
 use bb8::{ErrorSink, ManageConnection};
 use futures::{
-    channel::mpsc::{channel, Sender},
+    channel::mpsc::{channel, SendError, Sender},
     SinkExt,
 };
+use thiserror::Error;
 use tracing::debug;
 
-use crate::error;
-
-type ConnectionError = aws_smithy_http::result::SdkError<SendCommandError>;
+// FIXME: Consider making this a non-exhaustive enum.
+pub type ConnectionError = SdkError<SendCommandError>;
 
 #[derive(Debug, Copy, Clone)]
 pub struct QldbErrorLoggingErrorSink;
@@ -128,23 +128,25 @@ where
     }
 }
 
+#[derive(Debug, Error)]
+pub enum SendStreamingCommandError {
+    #[error("unable to send request: {0}")]
+    SendError(#[from] SendError),
+    #[error("received error: {0}")]
+    RecvError(#[from] SdkError<SendCommandError, RawMessage>),
+    #[error("attempted to send a message on a closed channel")]
+    ChannelClosed,
+}
+
 impl QldbHttp2Connection {
     pub(crate) async fn send_streaming_command(
         &mut self,
         command: CommandStream,
-    ) -> Result<ResultStream, SendCommandError> {
-        self.sender.send(Ok(command)).await.map_err(|_| todo!())?;
-        let resp = match self
-            .output
-            .result_stream
-            .recv()
-            .await
-            .map_err(|_| todo!())?
-        {
+    ) -> Result<ResultStream, SendStreamingCommandError> {
+        self.sender.send(Ok(command)).await?;
+        let resp = match self.output.result_stream.recv().await? {
             Some(msg) => msg,
-            None => Err(SendCommandError::unhandled(error::illegal_state(
-                "attempted to send a message on a closed channel",
-            )))?,
+            None => Err(SendStreamingCommandError::ChannelClosed)?,
         };
 
         Ok(resp)

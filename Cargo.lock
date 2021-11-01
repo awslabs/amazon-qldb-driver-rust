@@ -31,7 +31,6 @@ name = "amazon-qldb-driver-core"
 version = "0.1.0"
 dependencies = [
  "ansi_term 0.12.1",
- "anyhow",
  "async-trait",
  "aws-hyper",
  "aws-sdk-qldbsessionv2",

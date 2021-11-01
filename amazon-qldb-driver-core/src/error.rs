@@ -1,8 +1,8 @@
-use aws_sdk_qldbsessionv2::model::ResultStream;
 use aws_smithy_http::operation::BuildError;
 use thiserror::Error;
 
 pub type QldbResult<T> = std::result::Result<T, QldbError>;
+pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 #[derive(Error, Debug)]
 pub enum QldbError {
@@ -12,13 +12,6 @@ pub enum QldbError {
     IllegalState(String),
     #[error("usage error: {0}")]
     UsageError(String),
-    #[error("unexpected response: expected {expected}, got {actual:?}")]
-    UnexpectedResponse {
-        expected: String,
-        actual: ResultStream,
-    },
-    #[error("malformed response: {message}")]
-    MalformedResponse { message: String },
     #[error("todo")]
     TodoStableErrorApi,
 }
@@ -47,25 +40,6 @@ where
     S: Into<String>,
 {
     QldbError::IllegalState(message.into())
-}
-
-pub(crate) fn unexpected_response<S>(expected: S, actual: ResultStream) -> QldbError
-where
-    S: Into<String>,
-{
-    QldbError::UnexpectedResponse {
-        expected: expected.into(),
-        actual,
-    }
-}
-
-pub(crate) fn malformed_response<S>(message: S) -> QldbError
-where
-    S: Into<String>,
-{
-    QldbError::MalformedResponse {
-        message: message.into(),
-    }
 }
 
 pub(crate) fn todo_stable_error_api() -> QldbError {

@@ -1,4 +1,3 @@
-use anyhow::Result;
 use aws_hyper::{DynConnector, SmithyConnector};
 use aws_sdk_qldbsessionv2::{Client, Config};
 use bb8::Pool;
@@ -7,11 +6,12 @@ use std::{future::Future, time::Duration};
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
-use tracing::debug;
+use tracing::{debug, error};
 
-use crate::error::{self, QldbError, QldbResult};
-use crate::transaction::TransactionAttempt;
-use crate::{pool::QldbErrorLoggingErrorSink, transaction::TransactionAttemptResult};
+use crate::error::{self, BoxError, QldbResult};
+use crate::pool::SendStreamingCommandError;
+use crate::transaction::{CommunicationError, TransactionAttempt, TransactionAttemptError};
+use crate::{pool::QldbErrorLoggingErrorSink, transaction::TransactionDisposition};
 use crate::{
     pool::QldbSessionV2Manager, retry::default_retry_policy, retry::TransactionRetryPolicy,
 };
@@ -156,13 +156,30 @@ where
     transaction_retry_policy: Arc<Mutex<Box<dyn TransactionRetryPolicy + Send + Sync>>>,
 }
 
-#[derive(Error, Debug)]
+#[derive(Debug, Error)]
 pub enum TransactionError {
+    /// Unable to connect to the configured QLDB ledger. This might be because
+    /// of a configuration error (e.g. the ledger does not exist, the specified
+    /// region is incorrect), a connection error (unable to reach the QLDB
+    /// endpoint) or service error.
+    ///
+    /// The underlying cause is erased because there is no expectation that this
+    /// error be managed by customer code; the driver should already be retrying
+    /// as needed.
+    #[error("unable to connect")]
+    ConnectionError { cause: BoxError },
+
     #[error("transaction was aborted")]
     Aborted,
 
     #[error("transaction failed after {attempts} attempts, last error: {last_err}")]
-    MaxAttempts { last_err: QldbError, attempts: u32 },
+    MaxAttempts {
+        last_err: SendStreamingCommandError,
+        attempts: u32,
+    },
+
+    #[error("unhandled error")]
+    RuntimeError(#[from] BoxError),
 }
 
 impl<C> QldbDriver<C>
@@ -187,15 +204,25 @@ where
     /// closure! You should consider code running inside the closure as seeing
     /// speculative results that are only confirmed once the transaction
     /// commits.
-    pub async fn transact<F, Fut, R>(&self, transaction: F) -> Result<R>
+    pub async fn transact<F, Fut, R>(&self, transaction: F) -> Result<R, TransactionError>
     where
-        Fut: Future<Output = Result<TransactionAttemptResult<R>>>,
+        Fut: Future<Output = Result<TransactionDisposition<R>, BoxError>>,
         F: Fn(TransactionAttempt) -> Fut,
     {
         let mut attempt_number = 0u32;
 
         loop {
             attempt_number += 1;
+
+            // Connection failures at this point have already been retried by
+            // the pool, and so we give up at this point.
+            let mut pooled_session =
+                self.session_pool
+                    .get()
+                    .await
+                    .map_err(|bb8| TransactionError::ConnectionError {
+                        cause: Box::new(bb8),
+                    })?;
 
             // Note that `PooledConnection` uses the `Drop` trait to hand the
             // connection back to the pool. It'd be really nice to hand the
@@ -207,8 +234,6 @@ where
             // Rust will guarantee we do it at some point), but putting the
             // connection back in the pool before sleeping will probably be
             // beneficial.
-            let mut pooled_session = self.session_pool.get().await?;
-
             let tx = match TransactionAttempt::start(&mut pooled_session).await {
                 Ok(tx) => tx,
                 Err(e) => {
@@ -235,9 +260,9 @@ where
             //    communications failure), then the transaction is retried.
             //    b. Otherwise, we return the error to the user. Arbitrary
             //    application types are *not* retried.
-            let qldb_err = match transaction(tx).await {
-                Ok(TransactionAttemptResult::Committed { user_data, .. }) => return Ok(user_data),
-                Ok(TransactionAttemptResult::Aborted) => Err(TransactionError::Aborted)?,
+            let comm_err = match transaction(tx).await {
+                Ok(TransactionDisposition::Committed { user_data, .. }) => return Ok(user_data),
+                Ok(TransactionDisposition::Aborted) => Err(TransactionError::Aborted)?,
                 Err(e) => {
                     debug!(
                         error = %e,
@@ -245,15 +270,24 @@ where
                         "transaction failed with error"
                     );
 
-                    match e.downcast::<QldbError>() {
-                        Ok(qldb_err) => qldb_err,
+                    match e.downcast::<TransactionAttemptError>() {
+                        Ok(err) => match *err {
+                            TransactionAttemptError::CommunicationError(it) => it,
+                            TransactionAttemptError::TodoStableApi(it) => Err(it)?,
+                        },
                         // This branch means the transaction block failed with a
                         // non-QldbError. This means something unrelated to QLDB
                         // went wrong. We don't retry on arbitrary user errors.
-                        Err(other) => {
-                            return Err(other);
-                        }
+                        Err(other) => Err(other)?,
                     }
+                }
+            };
+
+            let transport_err = match comm_err {
+                CommunicationError::Transport(it) => it,
+                err => {
+                    error!(error = %err, "Unexpected failure on connection, will not retry");
+                    return Err(TransactionError::RuntimeError(Box::new(err)));
                 }
             };
 
@@ -263,12 +297,12 @@ where
 
             let retry_ins = {
                 let policy = self.transaction_retry_policy.lock().await;
-                policy.on_err(&qldb_err, attempt_number)
+                policy.on_err(&transport_err, attempt_number)
             };
 
             if retry_ins.should_retry {
                 debug!(
-                    error = %qldb_err,
+                    error = %transport_err,
                     attempt_number, "Error comitting, will retry"
                 );
                 if let Some(duration) = retry_ins.delay {
@@ -280,12 +314,13 @@ where
                 }
             } else {
                 debug!(
-                    "Not retrying after {} attempts due to error: {}",
-                    attempt_number, qldb_err
+                    error = %transport_err,
+                    "Not retrying after {} attempts due to error",
+                    attempt_number
                 );
 
                 return Err(TransactionError::MaxAttempts {
-                    last_err: qldb_err,
+                    last_err: transport_err,
                     attempts: attempt_number,
                 })?;
             }
