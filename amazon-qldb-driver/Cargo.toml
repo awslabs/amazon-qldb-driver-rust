@@ -15,6 +15,6 @@ aws-config = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.22-a
 thiserror = "1.0.29"
 anyhow = "1.0.44"
 tracing = "0.1.28"
-tracing-subscriber = { version = "0.2.25", features = ["fmt"] }
+tracing-subscriber = { version = "0.3.1", features = ["fmt"] }
 ion-rs = "0.6.0"
 ion-c-sys = "0.4.11"
