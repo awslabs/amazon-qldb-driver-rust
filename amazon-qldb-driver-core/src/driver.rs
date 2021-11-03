@@ -3,16 +3,12 @@ use aws_sdk_qldbsessionv2::{Client, Config};
 use bb8::Pool;
 use std::sync::Arc;
 use std::{future::Future, time::Duration};
-use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
-use tracing::{debug, error};
+use tracing::debug;
 
-use crate::error::{self, BoxError, QldbResult};
-use crate::pool::SendStreamingCommandError;
-use crate::transaction::{
-    CommunicationError, TransactAttemptError, TransactionAttempt, TransactionAttemptError,
-};
+use crate::error::{self, BuilderError, CommunicationError, TransactError};
+use crate::transaction::TransactionAttempt;
 use crate::{pool::QldbErrorLoggingErrorSink, transaction::TransactionDisposition};
 use crate::{
     pool::QldbSessionV2Manager, retry::default_retry_policy, retry::TransactionRetryPolicy,
@@ -68,27 +64,30 @@ impl QldbDriverBuilder {
     pub async fn sdk_config(
         self,
         sdk_config: &aws_types::config::Config,
-    ) -> QldbResult<QldbDriver<DynConnector>> {
+    ) -> Result<QldbDriver<DynConnector>, BuilderError> {
         let client = Client::new(sdk_config);
-        self.build_with_client(client).await
+        Ok(self.build_with_client(client).await?)
     }
 
     /// Builds a `QldbDriver` using the AWS SDK for Rust.
     ///
     /// Note that `config` is the service-specific (QldbSession) config. For
     /// shared config, see [`sdk_config`].
-    pub async fn config(self, config: Config) -> QldbResult<QldbDriver<DynConnector>> {
+    pub async fn config(self, config: Config) -> Result<QldbDriver<DynConnector>, BuilderError> {
         let client = Client::from_conf(config);
-        self.build_with_client(client).await
+        Ok(self.build_with_client(client).await?)
     }
 
-    pub async fn build_with_client<C>(self, client: Client<C>) -> QldbResult<QldbDriver<C>>
+    pub async fn build_with_client<C>(
+        self,
+        client: Client<C>,
+    ) -> Result<QldbDriver<C>, BuilderError>
     where
         C: SmithyConnector,
     {
-        let ledger_name = self
-            .ledger_name
-            .ok_or(error::usage_error("ledger_name must be initialized"))?;
+        let ledger_name = self.ledger_name.ok_or(BuilderError::UsageError(format!(
+            "ledger_name must be initialized"
+        )))?;
 
         let transaction_retry_policy = Arc::new(Mutex::new(self.transaction_retry_policy));
 
@@ -100,7 +99,7 @@ impl QldbDriverBuilder {
             .error_sink(Box::new(QldbErrorLoggingErrorSink::new()))
             .build(QldbSessionV2Manager::new(client, ledger_name.clone()))
             .await
-            .map_err(|_| error::todo_stable_error_api())?;
+            .map_err(error::build_err)?;
 
         Ok(QldbDriver {
             ledger_name: Arc::new(ledger_name.clone()),
@@ -158,60 +157,6 @@ where
     transaction_retry_policy: Arc<Mutex<Box<dyn TransactionRetryPolicy + Send + Sync>>>,
 }
 
-#[derive(Debug, Error)]
-pub enum TransactionError<E>
-where
-    E: std::error::Error + 'static,
-{
-    /// Error defined by user code.
-    #[error("user error: {0}")]
-    UserError(E),
-
-    /// Invalid Partiql statement, or some other problem that cannot be retried.
-    #[error("usage error: {message}")]
-    UsageError { message: String },
-
-    /// Unable to connect to the configured QLDB ledger. This might be because
-    /// of a configuration error (e.g. the ledger does not exist, the specified
-    /// region is incorrect), a connection error (unable to reach the QLDB
-    /// endpoint) or service error.
-    ///
-    /// The underlying cause is erased because there is no expectation that this
-    /// error be managed by customer code; the driver should already be retrying
-    /// as needed.
-    #[error("unable to connect")]
-    ConnectionError { cause: BoxError },
-
-    #[error("transaction was aborted")]
-    Aborted,
-
-    #[error("transaction failed after {attempts} attempts, last error: {last_err}")]
-    MaxAttempts {
-        last_err: SendStreamingCommandError,
-        attempts: u32,
-    },
-
-    #[error("unhandled error")]
-    RuntimeError(#[from] BoxError),
-}
-
-/// De-nests attempt errors into top level errors.
-impl<E> From<TransactionAttemptError> for TransactionError<E>
-where
-    E: std::error::Error + 'static,
-{
-    fn from(err: TransactionAttemptError) -> Self {
-        match err {
-            TransactionAttemptError::CommunicationError(it) => TransactionError::ConnectionError {
-                cause: Box::new(it),
-            },
-            TransactionAttemptError::InvalidPartiql { message } => {
-                TransactionError::UsageError { message }
-            }
-        }
-    }
-}
-
 impl<C> QldbDriver<C>
 where
     C: SmithyConnector,
@@ -234,10 +179,10 @@ where
     /// closure! You should consider code running inside the closure as seeing
     /// speculative results that are only confirmed once the transaction
     /// commits.
-    pub async fn transact<F, Fut, R, E>(&self, transaction: F) -> Result<R, TransactionError<E>>
+    pub async fn transact<F, Fut, R, E>(&self, transaction: F) -> Result<R, TransactError<E>>
     where
-        Fut: Future<Output = Result<TransactionDisposition<R>, TransactAttemptError<E>>>,
-        F: Fn(TransactionAttempt) -> Fut,
+        Fut: Future<Output = Result<TransactionDisposition<R>, TransactError<E>>>,
+        F: Fn(TransactionAttempt<E>) -> Fut,
         E: std::error::Error + 'static,
     {
         let mut attempt_number = 0u32;
@@ -251,8 +196,8 @@ where
                 self.session_pool
                     .get()
                     .await
-                    .map_err(|bb8| TransactionError::ConnectionError {
-                        cause: Box::new(bb8),
+                    .map_err(|bb8| TransactError::CommunicationError {
+                        source: Box::new(bb8),
                     })?;
 
             // Note that `PooledConnection` uses the `Drop` trait to hand the
@@ -293,30 +238,23 @@ where
             //    application types are *not* retried.
             let comm_err = match transaction(tx).await {
                 Ok(TransactionDisposition::Committed { user_data, .. }) => return Ok(user_data),
-                Ok(TransactionDisposition::Aborted) => Err(TransactionError::Aborted)?,
+                Ok(TransactionDisposition::Aborted) => Err(TransactError::Aborted)?,
                 Err(err) => {
                     debug!(
                         error = %err,
                         id = &tx_id[..],
                         "transaction failed with error"
                     );
-                    match err {
-                        TransactAttemptError::User(err) => {
-                            return Err(TransactionError::UserError(err))
-                        }
-                        TransactAttemptError::Qldb(attempt) => match attempt {
-                            TransactionAttemptError::CommunicationError(it) => it,
-                            _ => Err(attempt)?,
-                        },
-                    }
-                }
-            };
 
-            let transport_err = match comm_err {
-                CommunicationError::Transport(it) => it,
-                err => {
-                    error!(error = %err, "Unexpected failure on connection, will not retry");
-                    return Err(TransactionError::RuntimeError(Box::new(err)));
+                    match err {
+                        TransactError::CommunicationError { source } => {
+                            match source.downcast::<CommunicationError>() {
+                                Ok(it) => it,
+                                Err(source) => return Err(TransactError::IllegalState { source }),
+                            }
+                        }
+                        _ => return Err(err),
+                    }
                 }
             };
 
@@ -326,12 +264,12 @@ where
 
             let retry_ins = {
                 let policy = self.transaction_retry_policy.lock().await;
-                policy.on_err(&transport_err, attempt_number)
+                policy.on_err(&comm_err, attempt_number)
             };
 
             if retry_ins.should_retry {
                 debug!(
-                    error = %transport_err,
+                    error = %comm_err,
                     attempt_number, "Error comitting, will retry"
                 );
                 if let Some(duration) = retry_ins.delay {
@@ -343,13 +281,13 @@ where
                 }
             } else {
                 debug!(
-                    error = %transport_err,
+                    error = %comm_err,
                     "Not retrying after {} attempts due to error",
                     attempt_number
                 );
 
-                return Err(TransactionError::MaxAttempts {
-                    last_err: transport_err,
+                return Err(TransactError::MaxAttempts {
+                    last_err: comm_err,
                     attempts: attempt_number,
                 })?;
             }
