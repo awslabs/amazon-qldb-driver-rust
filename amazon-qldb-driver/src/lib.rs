@@ -3,8 +3,9 @@
 //! Usage example:
 //!
 //! ```no_run
+//! use std::convert::Infallible;
 //! use amazon_qldb_driver::awssdk::Config;
-//! use amazon_qldb_driver::{QldbDriverBuilder, TransactError};
+//! use amazon_qldb_driver::{QldbDriverBuilder, TransactionAttempt, TransactError};
 //! use tokio;
 //!
 //! #[tokio::main]
@@ -16,12 +17,10 @@
 //!         .sdk_config(&aws_config)
 //!         .await?;
 //!
-//!     // FIXME: I put a random error type in here
-//!     let r: Result<(), TransactError<std::io::Error>> = driver.transact(|mut tx| async {
+//!     driver.transact(|mut tx: TransactionAttempt<Infallible>| async {
 //!         tx.execute_statement("create table my_table").await?;
 //!         tx.commit(()).await
-//!     }).await;
-//!     r?;
+//!     }).await?;
 //!
 //!     Ok(())
 //! }
