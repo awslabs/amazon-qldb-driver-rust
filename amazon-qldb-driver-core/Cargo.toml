@@ -29,6 +29,9 @@ tracing = "0.1.29"
 http = "0.2.5"
 
 [dev-dependencies]
+aws-smithy-client = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.22-alpha", package = "aws-smithy-client", features = ["test-util"] }
+aws-smithy-eventstream  = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.22-alpha", package = "aws-smithy-eventstream", features = [] }
+serde_json = "1"
 hex-literal = "0.3.3"
 ansi_term = "0.12.1"
 tracing-subscriber = { version = "0.3.1", features = ["fmt"] }
