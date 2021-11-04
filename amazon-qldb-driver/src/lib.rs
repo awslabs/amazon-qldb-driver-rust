@@ -2,7 +2,7 @@
 //!
 //! Usage example:
 //!
-//! ```
+//! ```no_run
 //! use amazon_qldb_driver::awssdk::Config;
 //! use amazon_qldb_driver::{QldbDriverBuilder, TransactError};
 //! use tokio;

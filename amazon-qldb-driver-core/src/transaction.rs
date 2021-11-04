@@ -2,6 +2,7 @@ use aws_sdk_qldbsessionv2::model::{
     AbortTransactionRequest, CommandStream, CommitTransactionRequest, ExecuteStatementRequest,
     FetchPageRequest, ResultStream, StartTransactionRequest,
 };
+use bb8::PooledConnection;
 use bytes::Bytes;
 use ion_c_sys::reader::IonCReaderHandle;
 use ion_c_sys::result::IonCError;
@@ -10,7 +11,7 @@ use std::marker::PhantomData;
 use tracing::debug;
 
 use crate::error;
-use crate::pool::QldbHttp2Connection;
+use crate::pool::QldbSessionV2Manager;
 use crate::{error::TransactError, execution_stats::ExecutionStats};
 
 /// The results of executing a statement.
@@ -68,9 +69,9 @@ pub enum TransactionDisposition<R> {
 /// succeeds!
 ///
 /// `E` represents any custom error variant the user may throw.
-pub struct TransactionAttempt<'pool, E> {
-    /// A pool connection that we'll send our commands down.
-    connection: &'pool mut QldbHttp2Connection,
+pub struct TransactionAttempt<E> {
+    /// A pooled connection that we'll send our commands down.
+    connection: PooledConnection<'static, QldbSessionV2Manager>,
 
     /// The id of this transaction attempt. This is a speculative transaction
     /// id. That is, if the transaction commits, then this id is the id of the
@@ -93,13 +94,13 @@ pub struct TransactionAttempt<'pool, E> {
     err: PhantomData<E>,
 }
 
-impl<'pool, E> TransactionAttempt<'pool, E>
+impl<E> TransactionAttempt<E>
 where
     E: std::error::Error + 'static,
 {
     pub(crate) async fn start(
-        connection: &'pool mut QldbHttp2Connection,
-    ) -> Result<TransactionAttempt<'pool, E>, TransactError<E>> {
+        mut connection: PooledConnection<'static, QldbSessionV2Manager>,
+    ) -> Result<TransactionAttempt<E>, TransactError<E>> {
         let mut accumulated_execution_stats = ExecutionStats::default();
         let resp = connection
             .send_streaming_command(CommandStream::StartTransaction(
@@ -127,7 +128,7 @@ where
         })
     }
 
-    pub fn statement<S>(&mut self, statement: S) -> StatementBuilder<'pool, '_, E>
+    pub fn statement<S>(&mut self, statement: S) -> StatementBuilder<'_, E>
     where
         S: Into<String>,
     {
@@ -287,19 +288,16 @@ where
     }
 }
 
-pub struct StatementBuilder<'pool, 'tx, E> {
-    attempt: &'tx mut TransactionAttempt<'pool, E>,
+pub struct StatementBuilder<'tx, E> {
+    attempt: &'tx mut TransactionAttempt<E>,
     statement: Statement,
 }
 
-impl<'pool, 'tx, E> StatementBuilder<'pool, 'tx, E>
+impl<'tx, E> StatementBuilder<'tx, E>
 where
     E: std::error::Error + 'static,
 {
-    fn new(
-        attempt: &'tx mut TransactionAttempt<'pool, E>,
-        partiql: String,
-    ) -> StatementBuilder<'pool, 'tx, E> {
+    fn new(attempt: &'tx mut TransactionAttempt<E>, partiql: String) -> StatementBuilder<'tx, E> {
         StatementBuilder {
             attempt,
             statement: Statement {
@@ -313,7 +311,7 @@ where
     // 1. need an IonElement so we can hash it. in the future, we hope to remove this as a requirement
     // 2. perhaps we want an in-crate trait for coherency reasons
     // TODO: make public when ready
-    pub fn param<B>(mut self, param: B) -> StatementBuilder<'pool, 'tx, E>
+    pub fn param<B>(mut self, param: B) -> StatementBuilder<'tx, E>
     where
         B: Into<Bytes>,
     {

@@ -70,6 +70,7 @@ impl From<aws_sdk_qldbsessionv2::model::TransactionError> for GenericError {
 /// due to user code (e.g. deserializing a QLDB document into a local type), or
 /// from interacting with the QLDB service.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TransactError<E>
 where
     E: std::error::Error + 'static,
@@ -94,7 +95,7 @@ where
         source: BoxError,
     },
 
-    #[error("transaction was aborted")]
+    #[error("transaction was aborted by user code")]
     Aborted,
 
     #[error("transaction failed after {attempts} attempts, last error: {last_err}")]

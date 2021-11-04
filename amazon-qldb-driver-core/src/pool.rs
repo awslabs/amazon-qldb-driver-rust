@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use aws_hyper::{SdkError, SmithyConnector};
+use aws_hyper::{DynConnector, SdkError, SmithyConnector};
 use aws_sdk_qldbsessionv2::{
     error::SendCommandError,
     model::{CommandStream, ResultStream},
@@ -39,10 +39,7 @@ impl ErrorSink<ConnectionError> for QldbErrorLoggingErrorSink {
 
 // FIXME: This is not generic over the client (it uses the rust awssdk
 // directly), which means we cannot change the sdk (e.g. to support javascript).
-pub struct QldbSessionV2Manager<C>
-where
-    C: SmithyConnector,
-{
+pub struct QldbSessionV2Manager<C = DynConnector> {
     client: Client<C>,
     pub ledger_name: String,
 }

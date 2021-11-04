@@ -1,4 +1,3 @@
-use aws_hyper::{DynConnector, SmithyConnector};
 use aws_sdk_qldbsessionv2::{Client, Config};
 use bb8::Pool;
 use std::sync::Arc;
@@ -64,7 +63,7 @@ impl QldbDriverBuilder {
     pub async fn sdk_config(
         self,
         sdk_config: &aws_types::config::Config,
-    ) -> Result<QldbDriver<DynConnector>, BuilderError> {
+    ) -> Result<QldbDriver, BuilderError> {
         let client = Client::new(sdk_config);
         Ok(self.build_with_client(client).await?)
     }
@@ -73,18 +72,12 @@ impl QldbDriverBuilder {
     ///
     /// Note that `config` is the service-specific (QldbSession) config. For
     /// shared config, see [`sdk_config`].
-    pub async fn config(self, config: Config) -> Result<QldbDriver<DynConnector>, BuilderError> {
+    pub async fn config(self, config: Config) -> Result<QldbDriver, BuilderError> {
         let client = Client::from_conf(config);
         Ok(self.build_with_client(client).await?)
     }
 
-    pub async fn build_with_client<C>(
-        self,
-        client: Client<C>,
-    ) -> Result<QldbDriver<C>, BuilderError>
-    where
-        C: SmithyConnector,
-    {
+    pub async fn build_with_client(self, client: Client) -> Result<QldbDriver, BuilderError> {
         let ledger_name = self.ledger_name.ok_or(BuilderError::UsageError(format!(
             "ledger_name must be initialized"
         )))?;
@@ -148,19 +141,13 @@ impl QldbDriverBuilder {
 /// we wrap all policies in a Mutex. Performance of a Mutex is unlikely to be
 /// the limiting factor in a QLDB application.
 #[derive(Clone)]
-pub struct QldbDriver<C>
-where
-    C: SmithyConnector,
-{
+pub struct QldbDriver {
     pub ledger_name: Arc<String>,
-    session_pool: Arc<Pool<QldbSessionV2Manager<C>>>,
+    session_pool: Arc<Pool<QldbSessionV2Manager>>,
     transaction_retry_policy: Arc<Mutex<Box<dyn TransactionRetryPolicy + Send + Sync>>>,
 }
 
-impl<C> QldbDriver<C>
-where
-    C: SmithyConnector,
-{
+impl QldbDriver {
     pub fn ledger_name(&self) -> String {
         (*self.ledger_name).clone()
     }
@@ -190,15 +177,17 @@ where
         loop {
             attempt_number += 1;
 
-            // Connection failures at this point have already been retried by
-            // the pool, and so we give up at this point.
-            let mut pooled_session =
-                self.session_pool
-                    .get()
-                    .await
-                    .map_err(|bb8| TransactError::CommunicationError {
-                        source: Box::new(bb8),
-                    })?;
+            // We used `get_owned` to hide the lifetime of the pool from
+            // customers. This is important because otherwise the future
+            // inherits this lifetime and things get messy (shows up as:
+            // `TransactionAttempt<'pool>`).
+            let pooled_session = self.session_pool.get_owned().await.map_err(|bb8| {
+                // Connection failures at this point have already been retried by
+                // the pool, and so we give up at this point.
+                TransactError::CommunicationError {
+                    source: Box::new(bb8),
+                }
+            })?;
 
             // Note that `PooledConnection` uses the `Drop` trait to hand the
             // connection back to the pool. It'd be really nice to hand the
@@ -210,7 +199,7 @@ where
             // Rust will guarantee we do it at some point), but putting the
             // connection back in the pool before sleeping will probably be
             // beneficial.
-            let tx = match TransactionAttempt::start(&mut pooled_session).await {
+            let tx = match TransactionAttempt::start(pooled_session).await {
                 Ok(tx) => tx,
                 Err(e) => {
                     // FIXME: Include some sort of sleep and attempt cap.
@@ -257,10 +246,6 @@ where
                     }
                 }
             };
-
-            // See above note. We put the connection back in the pool before
-            // adding any delay.
-            drop(pooled_session);
 
             let retry_ins = {
                 let policy = self.transaction_retry_policy.lock().await;
