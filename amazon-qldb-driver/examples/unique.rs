@@ -1,5 +1,6 @@
-use amazon_qldb_driver::{aws_sdk_qldbsession::Config, QldbDriver, QldbDriverBuilder};
-use amazon_qldb_driver_core::api::QldbSession;
+use std::convert::Infallible;
+
+use amazon_qldb_driver::{QldbDriver, QldbDriverBuilder, TransactionAttempt};
 use anyhow::Result;
 use tokio::{self, spawn};
 
@@ -66,7 +67,7 @@ async fn main() -> Result<()> {
 
     let driver = QldbDriverBuilder::new()
         .ledger_name("unique-example")
-        .sdk_config(Config::new(&aws_config))
+        .sdk_config(&aws_config)
         .await?;
 
     // Next up, we'll run 100 concurrent transactions. Each of them will run the
@@ -162,12 +163,9 @@ async fn main() -> Result<()> {
 /// no reason to take a lock or check rows updated with a conditional.
 /// Concurrency in QLDB is simple. Write your code as if you're the only actor
 /// in the system **and then call commit**.
-async fn example_transaction<C>(driver: QldbDriver<C>, task_id: u32) -> Result<(bool, u32)>
-where
-    C: QldbSession + Send + Sync + Clone,
-{
+async fn example_transaction(driver: QldbDriver, task_id: u32) -> Result<(bool, u32)> {
     let winner = driver
-        .transact(|mut tx| async {
+        .transact(|mut tx: TransactionAttempt<Infallible>| async {
             let check = tx
                 .execute_statement("select * from example where id = 1")
                 .await?;
