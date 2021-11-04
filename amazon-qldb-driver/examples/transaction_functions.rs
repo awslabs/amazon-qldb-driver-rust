@@ -1,8 +1,7 @@
 use std::convert::Infallible;
 
-use amazon_qldb_driver::QldbDriverBuilder;
-use amazon_qldb_driver::{TransactError, TransactionAttempt};
-use amazon_qldb_driver_core::transaction::TransactionDisposition;
+use amazon_qldb_driver::TransactionAttempt;
+use amazon_qldb_driver::{QldbDriverBuilder, TransactionResult};
 use anyhow::Result;
 use ion_c_sys::reader::IonCReader;
 use tokio;
@@ -40,7 +39,7 @@ async fn main() -> Result<()> {
 /// [`TransactionResult`] for more information.
 async fn list_table_names(
     mut tx: TransactionAttempt<Infallible>,
-) -> Result<TransactionDisposition<Vec<String>>, TransactError<Infallible>> {
+) -> TransactionResult<Vec<String>, Infallible> {
     let results = tx
         .execute_statement("select value name from information_schema.user_tables")
         .await?;
