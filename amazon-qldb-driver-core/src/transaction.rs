@@ -1,13 +1,17 @@
+use async_stream::try_stream;
 use aws_sdk_qldbsessionv2::model::{
     AbortTransactionRequest, CommandStream, CommitTransactionRequest, ExecuteStatementRequest,
     FetchPageRequest, ResultStream, StartTransactionRequest,
 };
 use bb8::PooledConnection;
 use bytes::Bytes;
+use futures::StreamExt;
+use futures_core::Stream;
 use ion_c_sys::reader::IonCReaderHandle;
 use ion_c_sys::result::IonCError;
 use std::convert::TryFrom;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use tracing::debug;
 
 use crate::error;
@@ -23,19 +27,63 @@ use crate::{error::TransactError, execution_stats::ExecutionStats};
 /// [`cumulative_timing_information`] and [`cumulative_io_usage`] represent the
 /// sum of server reported timing and IO usage across all pages that were
 /// fetched.
-pub struct StatementResults {
-    values: Vec<Bytes>,
+pub struct StatementResults<'tx, E>
+where
+    E: std::error::Error + 'static,
+{
+    stream: Pin<Box<dyn Stream<Item = Result<Bytes, TransactError<E>>> + 'tx>>,
     execution_stats: ExecutionStats,
 }
 
-impl StatementResults {
-    fn new(values: Vec<Bytes>, execution_stats: ExecutionStats) -> StatementResults {
+impl<'tx, E> StatementResults<'tx, E>
+where
+    E: std::error::Error + 'static,
+{
+    fn new(
+        stream: impl Stream<Item = Result<Bytes, TransactError<E>>> + 'tx,
+        execution_stats: ExecutionStats,
+    ) -> StatementResults<'tx, E> {
         StatementResults {
-            values,
+            stream: Box::pin(stream),
             execution_stats,
         }
     }
 
+    pub fn execution_stats(&self) -> &ExecutionStats {
+        &self.execution_stats
+    }
+
+    pub async fn buffered(mut self) -> Result<BufferedStatementResults, TransactError<E>> {
+        let mut values = vec![];
+        while let Some(it) = self.next().await {
+            values.push(it?)
+        }
+
+        Ok(BufferedStatementResults { values })
+    }
+}
+
+impl<'tx, E> Stream for StatementResults<'tx, E>
+where
+    E: std::error::Error + 'static,
+{
+    type Item = Result<Bytes, TransactError<E>>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        // TODO: consume execution stats
+        let stream = unsafe { self.map_unchecked_mut(|s| &mut s.stream) };
+        stream.poll_next(cx)
+    }
+}
+
+pub struct BufferedStatementResults {
+    values: Vec<Bytes>,
+}
+
+impl BufferedStatementResults {
     pub fn len(&self) -> usize {
         self.values.len()
     }
@@ -48,10 +96,6 @@ impl StatementResults {
         self.values
             .iter()
             .map(|bytes| IonCReaderHandle::try_from(&bytes[..]))
-    }
-
-    pub fn execution_stats(&self) -> &ExecutionStats {
-        &self.execution_stats
     }
 }
 
@@ -141,18 +185,17 @@ where
     pub async fn execute_statement<S>(
         &mut self,
         partiql: S,
-    ) -> Result<StatementResults, TransactError<E>>
+    ) -> Result<StatementResults<'_, E>, TransactError<E>>
     where
         S: Into<String>,
     {
         self.statement(partiql).execute().await
     }
 
-    // FIXME: don't buffer all results
     async fn execute_statement_internal(
         &mut self,
         statement: Statement,
-    ) -> Result<StatementResults, TransactError<E>> {
+    ) -> Result<StatementResults<'_, E>, TransactError<E>> {
         let mut execution_stats = ExecutionStats::default();
         let resp = self
             .connection
@@ -171,55 +214,59 @@ where
         };
         execution_stats.accumulate(&execute_result);
 
-        let mut values = vec![];
-        let mut current = execute_result.first_page;
-        loop {
-            let page = match &current {
-                Some(_) => current.take().unwrap(),
-                None => break,
-            };
+        let stream = try_stream! {
+            let mut current = execute_result.first_page;
+            loop {
+                let page = match &current {
+                    Some(_) => current.take().unwrap(),
+                    None => break,
+                };
 
-            if let Some(holders) = page.values {
-                for holder in holders {
-                    let bytes = match (holder.ion_text, holder.ion_binary) {
-                        (None, Some(bytes)) => bytes,
-                        (Some(_txt), None) => unimplemented!(), // TextIonCursor::new(txt),
-                        _ => Err(error::malformed_response(
-                            "expected only one of ion binary or text",
-                        ))?,
-                    };
-                    values.push(Bytes::from(bytes.into_inner()));
-                }
+                if let Some(holders) = page.values {
+                    for holder in holders {
+                        let bytes = match (holder.ion_text, holder.ion_binary) {
+                            (None, Some(bytes)) => bytes,
+                            (Some(_txt), None) => unimplemented!(), // TextIonCursor::new(txt),
+                            _ => Err(error::malformed_response(
+                                "expected only one of ion binary or text",
+                            ))?,
+                        };
+                        yield Bytes::from(bytes.into_inner());
+                    }
 
-                if let Some(next_page_token) = page.next_page_token {
-                    let resp = self
-                        .connection
-                        .send_streaming_command(CommandStream::FetchPage(
-                            FetchPageRequest::builder()
-                                .transaction_id(&self.id)
-                                .next_page_token(&next_page_token)
-                                .build(),
-                        ))
-                        .await
-                        .map_err(error::transport_err)?;
+                    if let Some(next_page_token) = page.next_page_token {
+                        let resp = self
+                            .connection
+                            .send_streaming_command(CommandStream::FetchPage(
+                                FetchPageRequest::builder()
+                                    .transaction_id(&self.id)
+                                    .next_page_token(&next_page_token)
+                                    .build(),
+                            ))
+                            .await
+                            .map_err(error::transport_err)?;
 
-                    let fetch_page_result = match resp {
-                        ResultStream::FetchPage(it) => it,
-                        it => Err(error::unexpected_response("FetchPage", it))?,
-                    };
+                        let fetch_page_result = match resp {
+                            ResultStream::FetchPage(it) => it,
+                            it => Err(error::unexpected_response("FetchPage", it))?,
+                        };
 
-                    execution_stats.accumulate(&fetch_page_result);
+                        // TODO: accumulate
+                        // execution_stats.accumulate(&fetch_page_result);
 
-                    if let Some(p) = fetch_page_result.page {
-                        current.replace(p);
+                        if let Some(p) = fetch_page_result.page {
+                            current.replace(p);
+                        }
                     }
                 }
             }
-        }
+        };
 
-        self.accumulated_execution_stats
-            .accumulate(&execution_stats);
-        Ok(StatementResults::new(values, execution_stats))
+        // TODO: Need to do this
+        // self.accumulated_execution_stats
+        //     .accumulate(&execution_stats);
+
+        Ok(StatementResults::new(stream, execution_stats))
     }
 
     /// Attempt to commit this transaction. If the commit succeeds, `user_data`
@@ -319,7 +366,7 @@ where
         self
     }
 
-    pub async fn execute(self) -> Result<StatementResults, TransactError<E>> {
+    pub async fn execute(self) -> Result<StatementResults<'tx, E>, TransactError<E>> {
         let StatementBuilder { attempt, statement } = self;
         attempt.execute_statement_internal(statement).await
     }

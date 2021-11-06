@@ -9,6 +9,9 @@ edition = "2018"
 [dependencies]
 thiserror = "1.0.30"
 tokio = { version = "1.13.0", features = ["full"] }
+futures = "0.3"
+futures-core = "0.3"
+async-stream = "0.3"
 bytes = "1.1.0"
 async-trait = "0.1.51"
 # FIXME: The default features include "client" which generates an actual client.
@@ -23,7 +26,6 @@ sha2 = "0.9.8"
 ion-rs = "0.6.0"
 ion-c-sys = "0.4.11"
 rand = "0.8.4"
-futures = "0.3.17"
 bb8 = "0.7.1"
 tracing = "0.1.29"
 http = "0.2.5"

@@ -17,6 +17,8 @@ async fn test_success() -> Result<(), Box<dyn std::error::Error>> {
         .transact(|mut tx: TransactionAttempt<Infallible>| async {
             let table_names = tx
                 .execute_statement("select name from information_schema.user_tables")
+                .await?
+                .buffered()
                 .await?;
 
             tx.commit(table_names).await
