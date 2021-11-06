@@ -1,27 +1,22 @@
-use std::{
-    fmt::Debug,
-    sync::{Arc, Mutex},
-};
-
-use crate::api::{QldbSession, QldbSessionApi, SessionToken};
-use crate::error::QldbError;
 use async_trait::async_trait;
-use aws_sdk_qldbsession::{
-    error::{SendCommandError, SendCommandErrorKind},
-    input::SendCommandInput,
+use aws_hyper::{DynConnector, SdkError, SmithyConnector};
+use aws_sdk_qldbsessionv2::{
+    error::SendCommandError,
+    model::{CommandStream, ResultStream},
     output::SendCommandOutput,
-    SdkError,
+    Client,
 };
+use aws_smithy_http::event_stream::{BoxError, RawMessage};
 use bb8::{ErrorSink, ManageConnection};
+use futures::{
+    channel::mpsc::{channel, SendError, Sender},
+    SinkExt,
+};
+use thiserror::Error;
 use tracing::debug;
 
-pub struct QldbSessionManager<C>
-where
-    C: QldbSession + Send + Sync + Clone,
-{
-    pub client: C,
-    pub ledger_name: String,
-}
+// FIXME: Consider making this a non-exhaustive enum.
+pub type ConnectionError = SdkError<SendCommandError>;
 
 #[derive(Debug, Copy, Clone)]
 pub struct QldbErrorLoggingErrorSink;
@@ -32,79 +27,85 @@ impl QldbErrorLoggingErrorSink {
     }
 }
 
-impl ErrorSink<QldbError> for QldbErrorLoggingErrorSink {
-    fn sink(&self, error: QldbError) {
+impl ErrorSink<ConnectionError> for QldbErrorLoggingErrorSink {
+    fn sink(&self, error: ConnectionError) {
         debug!(error = %error, "error in connection pool");
     }
 
-    fn boxed_clone(&self) -> Box<dyn ErrorSink<QldbError>> {
+    fn boxed_clone(&self) -> Box<dyn ErrorSink<ConnectionError>> {
         Box::new(*self)
     }
 }
 
-/// A HTTP/1 based connection to QLDB. There is no one physical connection.
-/// Rather, a connection is represented by a "session token" (a unique, opaque
-/// string) that is passed as a parameter over an HTTP/1 request.
+// FIXME: This is not generic over the client (it uses the rust awssdk
+// directly), which means we cannot change the sdk (e.g. to support javascript).
+pub struct QldbSessionV2Manager<C = DynConnector> {
+    client: Client<C>,
+    pub ledger_name: String,
+}
+
+impl<C> QldbSessionV2Manager<C>
+where
+    C: SmithyConnector,
+{
+    pub(crate) fn new(
+        client: Client<C>,
+        ledger_name: impl Into<String>,
+    ) -> QldbSessionV2Manager<C> {
+        QldbSessionV2Manager {
+            client,
+            ledger_name: ledger_name.into(),
+        }
+    }
+}
+
+/// A HTTP/2 based connection to QLDB. There is one physical connection per
+/// session, and each session can have at most one open transaction.
 ///
-/// [`discard`] should be set to true if an API response ever indicates the
-/// session is broken.
-#[derive(Clone)]
-pub struct QldbHttp1Connection<C>
-where
-    C: QldbSession + Send + Sync + Clone,
-{
-    pub(crate) inner: Arc<Mutex<QldbHttp1ConnectionInner<C>>>,
-}
-
-pub(crate) struct QldbHttp1ConnectionInner<C>
-where
-    C: QldbSession + Send + Sync + Clone,
-{
-    client: C,
-    token: SessionToken,
-    discard: bool,
-}
-
-impl<C> QldbHttp1Connection<C>
-where
-    C: QldbSession + Send + Sync + Clone,
-{
-    pub fn session_token(&self) -> SessionToken {
-        if let Ok(g) = self.inner.lock() {
-            g.token.clone()
-        } else {
-            // there is no code that can panic while holding the lock, so it
-            // seems unreasonable to force the caller of this code to deal with
-            // that case.
-            unreachable!()
-        }
-    }
-
-    pub(crate) fn notify_invalid(&self) {
-        if let Ok(mut g) = self.inner.lock() {
-            g.discard = true;
-        }
-    }
+/// Sessions are broken upon exception. An exception is an error that is sent as
+/// an exception (as opposed to as data).
+pub struct QldbHttp2Connection {
+    pub ledger_name: String,
+    sender: Sender<Result<CommandStream, BoxError>>,
+    output: SendCommandOutput,
 }
 
 #[async_trait]
-impl<C> ManageConnection for QldbSessionManager<C>
+impl<C> ManageConnection for QldbSessionV2Manager<C>
 where
-    C: QldbSession + Send + Sync + Clone + 'static,
+    C: SmithyConnector,
 {
-    type Connection = QldbHttp1Connection<C>;
-    type Error = QldbError;
+    type Connection = QldbHttp2Connection;
+    type Error = ConnectionError;
 
     async fn connect(&self) -> Result<Self::Connection, Self::Error> {
-        let token = self.client.start_session(self.ledger_name.clone()).await?;
-        Ok(QldbHttp1Connection {
-            inner: Arc::new(Mutex::new(QldbHttp1ConnectionInner {
-                client: self.client.clone(),
-                token,
-                discard: false,
-            })),
+        // Event streams support full-duplex communication. However, Qldb does
+        // not yet support this. That is, only 1 request-response pair may be
+        // inflight at any given time.
+        let (sender, receiver) = channel(1);
+
+        let output = self
+            .client
+            .send_command()
+            .ledger_name(&self.ledger_name[..])
+            .command_stream(receiver.into())
+            .send()
+            .await?;
+
+        // TODO: Is there an initial-response?
+        // let initial = output.result_stream.try_recv_initial().await?;
+
+        Ok(QldbHttp2Connection {
+            ledger_name: self.ledger_name.clone(),
+            sender,
+            output,
         })
     }
+
+    // FIXME: these methods are probably wrong. Usually you have to do some work
+    // (i.e. read from the connection) to learn that it's broken. Figure out
+    // what to do here and inline bb8 documentation (i.e. when are these called,
+    // etc.).
 
     async fn is_valid(
         &self,
@@ -114,65 +115,37 @@ where
     }
 
     fn has_broken(&self, conn: &mut Self::Connection) -> bool {
-        if let Ok(g) = conn.inner.lock() {
-            g.discard
-        } else {
-            true
+        match (
+            conn.sender.is_closed(),
+            false, /* conn.output.result_stream.is_closed() FIXME?? */
+        ) {
+            (false, false) => true,
+            _ => false,
         }
     }
 }
 
-/// Wraps each call to the [`QldbSessionApi`] with a call to [`self.handle`].
-/// This ensures we call `self.notify_invalid` if we ever get an
-/// `InvalidSession` response.
-///
-/// `StartSession` has additional checks.
-#[async_trait]
-impl<C> QldbSession for QldbHttp1Connection<C>
-where
-    C: QldbSession + Send + Sync + Clone,
-{
-    async fn send_command(
-        &self,
-        input: SendCommandInput,
-    ) -> Result<SendCommandOutput, SdkError<SendCommandError>> {
-        let client = if let Ok(g) = self.inner.lock() {
-            if g.discard {
-                panic!("session {} should have been discarded", g.token)
-            }
+#[derive(Debug, Error)]
+pub enum SendStreamingCommandError {
+    #[error("unable to send request: {0}")]
+    SendError(#[from] SendError),
+    #[error("received error: {0}")]
+    RecvError(#[from] SdkError<SendCommandError, RawMessage>),
+    #[error("attempted to send a message on a closed channel")]
+    ChannelClosed,
+}
 
-            // Note: the delegated call to `send_command` creates a future which
-            // must be `Send`, which a `MutexGuard` isn't. So, we clone the
-            // underlying client and move that into the closure. Rusoto clients
-            // have an inner Arc, so this clone is really cheap.
-            g.client.clone()
-        } else {
-            unreachable!()
+impl QldbHttp2Connection {
+    pub(crate) async fn send_streaming_command(
+        &mut self,
+        command: CommandStream,
+    ) -> Result<ResultStream, SendStreamingCommandError> {
+        self.sender.send(Ok(command)).await?;
+        let resp = match self.output.result_stream.recv().await? {
+            Some(msg) => msg,
+            None => Err(SendStreamingCommandError::ChannelClosed)?,
         };
 
-        let is_start_session = input.start_session.is_some();
-        let res = client.send_command(input).await;
-
-        if let Err(SdkError::ServiceError {
-            err: SendCommandError { kind, .. },
-            ..
-        }) = &res
-        {
-            if let SendCommandErrorKind::InvalidSessionException(_) = kind {
-                self.notify_invalid();
-            }
-
-            if is_start_session {
-                if let SendCommandErrorKind::BadRequestException(ref message) = kind {
-                    debug!(
-                        session_token = %self.session_token(),
-                        %message, "unable to start a transaction on session (will be discarded)"
-                    );
-                    self.notify_invalid();
-                }
-            }
-        }
-
-        res
+        Ok(resp)
     }
 }

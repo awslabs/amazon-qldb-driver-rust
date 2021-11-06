@@ -1,19 +1,17 @@
-use anyhow::Result;
-use aws_hyper::Client;
-use aws_sdk_qldbsession::Config;
+use aws_sdk_qldbsessionv2::{Client, Config};
 use bb8::Pool;
 use std::sync::Arc;
 use std::{future::Future, time::Duration};
-use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::debug;
 
-use crate::api::{QldbSession, QldbSessionSdk};
-use crate::error::{QldbError, QldbResult};
+use crate::error::{self, BuilderError, CommunicationError, TransactError};
 use crate::transaction::TransactionAttempt;
-use crate::{pool::QldbErrorLoggingErrorSink, transaction::TransactionAttemptResult};
-use crate::{pool::QldbSessionManager, retry::default_retry_policy, retry::TransactionRetryPolicy};
+use crate::{pool::QldbErrorLoggingErrorSink, transaction::TransactionDisposition};
+use crate::{
+    pool::QldbSessionV2Manager, retry::default_retry_policy, retry::TransactionRetryPolicy,
+};
 
 pub struct QldbDriverBuilder {
     ledger_name: Option<String>,
@@ -60,19 +58,29 @@ impl QldbDriverBuilder {
     /// Build a `QldbDriver` using the AWS SDK for Rust.
     ///
     /// `sdk_config` will be used to create a configured instance of the SDK.
-    pub async fn sdk_config(self, sdk_config: Config) -> QldbResult<QldbDriver<QldbSessionSdk>> {
-        let hyper = Client::https();
-        let client = QldbSessionSdk::new(hyper, sdk_config);
-        self.build_with_client(client).await
+    /// Note that this configuration uses the "sdk config" as opposed to the
+    /// QLDB specific config.
+    pub async fn sdk_config(
+        self,
+        sdk_config: &aws_types::config::Config,
+    ) -> Result<QldbDriver, BuilderError> {
+        let client = Client::new(sdk_config);
+        Ok(self.build_with_client(client).await?)
     }
 
-    pub async fn build_with_client<C>(self, client: C) -> QldbResult<QldbDriver<C>>
-    where
-        C: QldbSession + Send + Sync + Clone + 'static,
-    {
-        let ledger_name = self.ledger_name.ok_or(QldbError::UsageError(
-            "ledger_name must be initialized".to_string(),
-        ))?;
+    /// Builds a `QldbDriver` using the AWS SDK for Rust.
+    ///
+    /// Note that `config` is the service-specific (QldbSession) config. For
+    /// shared config, see [`sdk_config`].
+    pub async fn config(self, config: Config) -> Result<QldbDriver, BuilderError> {
+        let client = Client::from_conf(config);
+        Ok(self.build_with_client(client).await?)
+    }
+
+    pub async fn build_with_client(self, client: Client) -> Result<QldbDriver, BuilderError> {
+        let ledger_name = self.ledger_name.ok_or(BuilderError::UsageError(format!(
+            "ledger_name must be initialized"
+        )))?;
 
         let transaction_retry_policy = Arc::new(Mutex::new(self.transaction_retry_policy));
 
@@ -82,15 +90,12 @@ impl QldbDriverBuilder {
             .max_size(self.max_concurrent_transactions)
             .connection_timeout(Duration::from_secs(10))
             .error_sink(Box::new(QldbErrorLoggingErrorSink::new()))
-            .build(QldbSessionManager {
-                client: client.clone(),
-                ledger_name: ledger_name.clone(),
-            })
-            .await?;
+            .build(QldbSessionV2Manager::new(client, ledger_name.clone()))
+            .await
+            .map_err(error::build_err)?;
 
         Ok(QldbDriver {
             ledger_name: Arc::new(ledger_name.clone()),
-            client: client.clone(),
             session_pool: Arc::new(session_pool),
             transaction_retry_policy,
         })
@@ -136,29 +141,13 @@ impl QldbDriverBuilder {
 /// we wrap all policies in a Mutex. Performance of a Mutex is unlikely to be
 /// the limiting factor in a QLDB application.
 #[derive(Clone)]
-pub struct QldbDriver<C>
-where
-    C: QldbSession + Send + Sync + Clone + 'static,
-{
-    ledger_name: Arc<String>,
-    client: C,
-    session_pool: Arc<Pool<QldbSessionManager<C>>>,
+pub struct QldbDriver {
+    pub ledger_name: Arc<String>,
+    session_pool: Arc<Pool<QldbSessionV2Manager>>,
     transaction_retry_policy: Arc<Mutex<Box<dyn TransactionRetryPolicy + Send + Sync>>>,
 }
 
-#[derive(Error, Debug)]
-pub enum TransactionError {
-    #[error("transaction was aborted")]
-    Aborted,
-
-    #[error("transaction failed after {attempts} attempts, last error: {last_err}")]
-    MaxAttempts { last_err: QldbError, attempts: u32 },
-}
-
-impl<C> QldbDriver<C>
-where
-    C: QldbSession + Send + Sync + Clone,
-{
+impl QldbDriver {
     pub fn ledger_name(&self) -> String {
         (*self.ledger_name).clone()
     }
@@ -177,19 +166,40 @@ where
     /// closure! You should consider code running inside the closure as seeing
     /// speculative results that are only confirmed once the transaction
     /// commits.
-    pub async fn transact<F, Fut, R>(&self, transaction: F) -> Result<R>
+    pub async fn transact<F, Fut, R, E>(&self, transaction: F) -> Result<R, TransactError<E>>
     where
-        Fut: Future<Output = Result<TransactionAttemptResult<R>>>,
-        F: Fn(TransactionAttempt<C>) -> Fut,
+        Fut: Future<Output = Result<TransactionDisposition<R>, TransactError<E>>>,
+        F: Fn(TransactionAttempt<E>) -> Fut,
+        E: std::error::Error + 'static,
     {
         let mut attempt_number = 0u32;
 
         loop {
             attempt_number += 1;
 
-            let pooled_session = self.session_pool.get().await?;
+            // We used `get_owned` to hide the lifetime of the pool from
+            // customers. This is important because otherwise the future
+            // inherits this lifetime and things get messy (shows up as:
+            // `TransactionAttempt<'pool>`).
+            let pooled_session = self.session_pool.get_owned().await.map_err(|bb8| {
+                // Connection failures at this point have already been retried by
+                // the pool, and so we give up at this point.
+                TransactError::CommunicationError {
+                    source: Box::new(bb8),
+                }
+            })?;
 
-            let tx = match TransactionAttempt::start(pooled_session.clone()).await {
+            // Note that `PooledConnection` uses the `Drop` trait to hand the
+            // connection back to the pool. It'd be really nice to hand the
+            // owned connection to the attempt such that the attempt naturally
+            // handed the connection back. However, this requires plumbing the
+            // manager's generics down, which is ugly, especially since
+            // `TransactionAttempt` is customer-facing. Instead, we manually
+            // discard the connection asap. This isn't a correctness risk (since
+            // Rust will guarantee we do it at some point), but putting the
+            // connection back in the pool before sleeping will probably be
+            // beneficial.
+            let tx = match TransactionAttempt::start(pooled_session).await {
                 Ok(tx) => tx,
                 Err(e) => {
                     // FIXME: Include some sort of sleep and attempt cap.
@@ -215,36 +225,36 @@ where
             //    communications failure), then the transaction is retried.
             //    b. Otherwise, we return the error to the user. Arbitrary
             //    application types are *not* retried.
-            let qldb_err = match transaction(tx).await {
-                Ok(TransactionAttemptResult::Committed { user_data, .. }) => return Ok(user_data),
-                Ok(TransactionAttemptResult::Aborted) => Err(TransactionError::Aborted)?,
-                Err(e) => {
+            let comm_err = match transaction(tx).await {
+                Ok(TransactionDisposition::Committed { user_data, .. }) => return Ok(user_data),
+                Ok(TransactionDisposition::Aborted) => Err(TransactError::Aborted)?,
+                Err(err) => {
                     debug!(
-                        error = %e,
+                        error = %err,
                         id = &tx_id[..],
                         "transaction failed with error"
                     );
 
-                    match e.downcast::<QldbError>() {
-                        Ok(qldb_err) => qldb_err,
-                        // This branch means the transaction block failed with a
-                        // non-QldbError. This means something unrelated to QLDB
-                        // went wrong. We don't retry on arbitrary user errors.
-                        Err(other) => {
-                            return Err(other);
+                    match err {
+                        TransactError::CommunicationError { source } => {
+                            match source.downcast::<CommunicationError>() {
+                                Ok(it) => it,
+                                Err(source) => return Err(TransactError::IllegalState { source }),
+                            }
                         }
+                        _ => return Err(err),
                     }
                 }
             };
 
             let retry_ins = {
                 let policy = self.transaction_retry_policy.lock().await;
-                policy.on_err(&qldb_err, attempt_number)
+                policy.on_err(&comm_err, attempt_number)
             };
 
             if retry_ins.should_retry {
                 debug!(
-                    error = %qldb_err,
+                    error = %comm_err,
                     attempt_number, "Error comitting, will retry"
                 );
                 if let Some(duration) = retry_ins.delay {
@@ -256,12 +266,13 @@ where
                 }
             } else {
                 debug!(
-                    "Not retrying after {} attempts due to error: {}",
-                    attempt_number, qldb_err
+                    error = %comm_err,
+                    "Not retrying after {} attempts due to error",
+                    attempt_number
                 );
 
-                return Err(TransactionError::MaxAttempts {
-                    last_err: qldb_err,
+                return Err(TransactError::MaxAttempts {
+                    last_err: comm_err,
                     attempts: attempt_number,
                 })?;
             }

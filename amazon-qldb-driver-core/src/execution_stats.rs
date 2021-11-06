@@ -1,4 +1,4 @@
-use aws_sdk_qldbsession::model;
+use aws_sdk_qldbsessionv2::model;
 
 // public (stable) types for execution stats.
 //

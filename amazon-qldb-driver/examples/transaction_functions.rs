@@ -1,7 +1,7 @@
-use amazon_qldb_driver::aws_sdk_qldbsession::Config;
-use amazon_qldb_driver::QldbDriverBuilder;
-use amazon_qldb_driver::{TransactionAttempt, TransactionResult};
-use amazon_qldb_driver_core::api::QldbSession;
+use std::convert::Infallible;
+
+use amazon_qldb_driver::TransactionAttempt;
+use amazon_qldb_driver::{QldbDriverBuilder, TransactionResult};
 use anyhow::Result;
 use ion_c_sys::reader::IonCReader;
 use tokio;
@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
 
     let driver = QldbDriverBuilder::new()
         .ledger_name("sample-ledger")
-        .sdk_config(Config::new(&aws_config))
+        .sdk_config(&aws_config)
         .await?;
 
     let table_names = driver.transact(list_table_names).await?;
@@ -37,10 +37,9 @@ async fn main() -> Result<()> {
 ///
 /// The function returns a special result type. See the documentation on
 /// [`TransactionResult`] for more information.
-async fn list_table_names<C>(mut tx: TransactionAttempt<C>) -> TransactionResult<Vec<String>>
-where
-    C: QldbSession + Send + Sync + Clone,
-{
+async fn list_table_names(
+    mut tx: TransactionAttempt<Infallible>,
+) -> TransactionResult<Vec<String>, Infallible> {
     let results = tx
         .execute_statement("select value name from information_schema.user_tables")
         .await?;
