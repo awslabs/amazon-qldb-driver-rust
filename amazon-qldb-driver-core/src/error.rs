@@ -1,7 +1,7 @@
 use aws_sdk_qldbsession::{error, SdkError};
 
-use core::fmt;
 use aws_smithy_http::operation::BuildError;
+use core::fmt;
 use thiserror::Error;
 
 pub type QldbResult<T> = std::result::Result<T, QldbError>;
