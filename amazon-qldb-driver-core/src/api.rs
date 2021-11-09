@@ -51,6 +51,7 @@ where
     ) -> Result<SendCommandOutput, SdkError<SendCommandError>> {
         let op = input
             .make_operation(&self.inner.conf)
+            .await
             .map_err(|err| SdkError::ConstructionFailure(err.into()))?;
         self.inner.client.call(op).await
     }
