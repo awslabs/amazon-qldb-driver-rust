@@ -130,12 +130,58 @@ impl QldbDriverBuilder {
 ///
 /// See [`QldbDriverBuilder`].
 ///
-/// ## Statements (queries and results)
+/// ## Basic usage
+///
+/// All interaction with QLDB is in the context of a transaction. Transactions
+/// are _interactive_. That is, a transaction is a conversation between your
+/// application and QLDB. During the conversation you may issue reads or writes
+/// to QLDB, or run arbitrary code.
 ///
 /// Reads and writes to QLDB are achieved through PartiQL statements. PartiQL
 /// extends SQL with support for open and nested content. You can learn more
 /// about it in the [documentation].
 /// [documentation]: https://docs.aws.amazon.com/qldb/latest/developerguide/ql-reference.html
+///
+/// Ultimately, transactions must either commit or be abandoned. We'll show
+/// example usage here, but the the docs page on [concurrency] has much more
+/// information.
+/// [concurrency]: https://docs.aws.amazon.com/qldb/latest/developerguide/concurrency.html
+///
+/// ```no_run
+/// # use std::convert::Infallible;
+/// #
+/// # use amazon_qldb_driver_core::ion_compat;
+/// # use amazon_qldb_driver_core::{QldbDriverBuilder, TransactionAttempt};
+/// # use tokio;
+/// # use tracing::info;
+/// #
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///       let driver = QldbDriverBuilder::new()
+///           .ledger_name("sample-ledger")
+///           .build()
+///           .await?;
+///
+///       let results = driver
+///           .transact(|mut tx: TransactionAttempt<Infallible>| async {
+///               let results = tx
+///                   .execute_statement("select name from information_schema.user_tables")
+///                   .await?
+///                   .buffered()
+///                   .await?;
+///
+///               tx.commit(results).await
+///           })
+///           .await?;
+///
+///       for reader in results.readers() {
+///           let pretty = ion_compat::to_string_pretty(reader?)?;
+///           println!("{}", pretty);
+///       }
+/// #
+/// #     Ok(())
+/// # }
+/// ```
 ///
 /// ## Concurrency
 ///
