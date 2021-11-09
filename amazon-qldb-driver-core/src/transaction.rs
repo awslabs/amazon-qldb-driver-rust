@@ -1,16 +1,15 @@
-use async_stream::try_stream;
 use aws_sdk_qldbsessionv2::model::{
-    AbortTransactionRequest, CommandStream, CommitTransactionRequest, ExecuteStatementRequest,
-    FetchPageRequest, ResultStream, StartTransactionRequest,
+    AbortTransactionRequest, CommandStream, CommitTransactionRequest, ResultStream,
+    StartTransactionRequest,
 };
 use bb8::PooledConnection;
 use bytes::Bytes;
 use std::marker::PhantomData;
 use tracing::debug;
 
-use crate::error;
 use crate::pool::QldbSessionV2Manager;
 use crate::results::StatementResults;
+use crate::{error, results};
 use crate::{error::TransactError, execution_stats::ExecutionStats};
 
 pub enum TransactionDisposition<R> {
@@ -56,6 +55,17 @@ impl<E> TransactionAttempt<E>
 where
     E: std::error::Error + 'static,
 {
+    /// Delegates to the underlying connection with a call to `map_err`.
+    pub(crate) async fn send_streaming_command(
+        &mut self,
+        command: CommandStream,
+    ) -> Result<ResultStream, TransactError<E>> {
+        self.connection
+            .send_streaming_command(command)
+            .await
+            .map_err(error::transport_err)
+    }
+
     pub(crate) async fn start(
         mut connection: PooledConnection<'static, QldbSessionV2Manager>,
     ) -> Result<TransactionAttempt<E>, TransactError<E>> {
@@ -104,83 +114,6 @@ where
         S: Into<String>,
     {
         self.statement(partiql).execute().await
-    }
-
-    async fn execute_statement_internal(
-        &mut self,
-        statement: Statement,
-    ) -> Result<StatementResults<'_, E>, TransactError<E>> {
-        let mut execution_stats = ExecutionStats::default();
-        let resp = self
-            .connection
-            .send_streaming_command(CommandStream::ExecuteStatement(
-                ExecuteStatementRequest::builder()
-                    .transaction_id(&self.id)
-                    .statement(&statement.partiql)
-                    .build(),
-            ))
-            .await
-            .map_err(error::transport_err)?;
-
-        let execute_result = match resp {
-            ResultStream::ExecuteStatement(it) => it,
-            it => Err(error::unexpected_response("ExecuteStatement", it))?,
-        };
-        execution_stats.accumulate(&execute_result);
-
-        let stream = try_stream! {
-            let mut current = execute_result.first_page;
-            loop {
-                let page = match &current {
-                    Some(_) => current.take().unwrap(),
-                    None => break,
-                };
-
-                if let Some(holders) = page.values {
-                    for holder in holders {
-                        let bytes = match (holder.ion_text, holder.ion_binary) {
-                            (None, Some(bytes)) => bytes,
-                            (Some(_txt), None) => unimplemented!(), // TextIonCursor::new(txt),
-                            _ => Err(error::malformed_response(
-                                "expected only one of ion binary or text",
-                            ))?,
-                        };
-                        yield Bytes::from(bytes.into_inner());
-                    }
-
-                    if let Some(next_page_token) = page.next_page_token {
-                        let resp = self
-                            .connection
-                            .send_streaming_command(CommandStream::FetchPage(
-                                FetchPageRequest::builder()
-                                    .transaction_id(&self.id)
-                                    .next_page_token(&next_page_token)
-                                    .build(),
-                            ))
-                            .await
-                            .map_err(error::transport_err)?;
-
-                        let fetch_page_result = match resp {
-                            ResultStream::FetchPage(it) => it,
-                            it => Err(error::unexpected_response("FetchPage", it))?,
-                        };
-
-                        // TODO: accumulate
-                        // execution_stats.accumulate(&fetch_page_result);
-
-                        if let Some(p) = fetch_page_result.page {
-                            current.replace(p);
-                        }
-                    }
-                }
-            }
-        };
-
-        // TODO: Need to do this
-        // self.accumulated_execution_stats
-        //     .accumulate(&execution_stats);
-
-        Ok(StatementResults::new(stream, execution_stats))
     }
 
     /// Attempt to commit this transaction. If the commit succeeds, `user_data`
@@ -282,11 +215,11 @@ where
 
     pub async fn execute(self) -> Result<StatementResults<'tx, E>, TransactError<E>> {
         let StatementBuilder { attempt, statement } = self;
-        attempt.execute_statement_internal(statement).await
+        results::execute_statement_paginated(attempt, statement).await
     }
 }
 
-struct Statement {
-    partiql: String,
-    params: Vec<Bytes>,
+pub(crate) struct Statement {
+    pub(crate) partiql: String,
+    pub(crate) params: Vec<Bytes>,
 }

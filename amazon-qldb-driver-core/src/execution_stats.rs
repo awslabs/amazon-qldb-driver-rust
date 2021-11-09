@@ -49,6 +49,15 @@ impl Default for ExecutionStats {
 pub trait HasExecutionStats {
     fn timing_information(&self) -> model::TimingInformation;
     fn io_usage(&self) -> model::IoUsage;
+
+    fn extract_owned(&self) -> ExecutionStats
+    where
+        Self: Sized,
+    {
+        let mut new = ExecutionStats::default();
+        new.accumulate(self);
+        new
+    }
 }
 
 impl HasExecutionStats for ExecutionStats {
