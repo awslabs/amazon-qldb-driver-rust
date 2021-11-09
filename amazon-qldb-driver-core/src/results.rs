@@ -187,17 +187,17 @@ where
     }
 }
 
-/// Asynchronously stream results from QLDB. The base usage looks like this:
-///
-/// ```no_run
-/// while let Some(result) = results.next().await {
-///     let value = result?;
-///     // process the raw bytes
-/// }
-/// ```
-///
-/// Higher level abstractions or combinators can be used to make this more
-/// ergonomic, such as deserializing all values into structs.
+// Asynchronously stream results from QLDB. The base usage looks like this:
+//
+// ```
+// while let Some(result) = results.next().await {
+//     let value = result?;
+//     // process the raw bytes
+// }
+// ```
+//
+// Higher level abstractions or combinators can be used to make this more
+// ergonomic, such as deserializing all values into structs.
 impl<'tx, E> Stream for StatementResults<'tx, E>
 where
     E: std::error::Error + 'static,

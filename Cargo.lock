@@ -33,6 +33,7 @@ dependencies = [
  "ansi_term 0.12.1",
  "async-stream",
  "async-trait",
+ "aws-config",
  "aws-hyper",
  "aws-sdk-qldbsessionv2",
  "aws-smithy-client",
@@ -52,6 +53,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "tokio",
+ "tokio-test",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1968,6 +1970,30 @@ dependencies = [
  "rustls",
  "tokio",
  "webpki",
+]
+
+[[package]]
+name = "tokio-stream"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50145484efff8818b5ccd256697f36863f587da82cf8b409c53adf1e840798e3"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-test"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53474327ae5e166530d17f2d956afcb4f8a004de581b3cae10f12006bc8163e3"
+dependencies = [
+ "async-stream",
+ "bytes 1.1.0",
+ "futures-core",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

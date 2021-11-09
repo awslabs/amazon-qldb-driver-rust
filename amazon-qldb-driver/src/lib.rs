@@ -29,7 +29,8 @@
 pub use amazon_qldb_driver_core::awssdk;
 pub use amazon_qldb_driver_core::error::{BoxError, BuilderError, TransactError};
 pub use amazon_qldb_driver_core::ion_compat;
-pub use amazon_qldb_driver_core::transaction::{StatementResults, TransactionDisposition};
+pub use amazon_qldb_driver_core::results::StatementResults;
+pub use amazon_qldb_driver_core::transaction::TransactionDisposition;
 pub use amazon_qldb_driver_core::{
     retry, version, QldbDriver, QldbDriverBuilder, TransactionAttempt,
 };

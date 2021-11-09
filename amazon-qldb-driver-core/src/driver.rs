@@ -13,6 +13,21 @@ use crate::{
     pool::QldbSessionV2Manager, retry::default_retry_policy, retry::TransactionRetryPolicy,
 };
 
+/// A builder that products a [`QldbDriver`].
+///
+/// The simplest usage requires just a ledger name:
+///
+/// ```no_run
+/// use amazon_qldb_driver_core::QldbDriverBuilder;
+///
+/// # let _driver: Result<_, Box<dyn std::error::Error>> = tokio_test::block_on(async {
+/// let driver = QldbDriverBuilder::default()
+///     .ledger_name("my_ledger")
+///     .build()
+///     .await?;
+/// # Ok(driver)
+/// # });
+/// ```
 pub struct QldbDriverBuilder {
     ledger_name: Option<String>,
     transaction_retry_policy: Box<dyn TransactionRetryPolicy + Send + Sync>,
@@ -53,6 +68,15 @@ impl QldbDriverBuilder {
     pub fn max_sessions(mut self, max_sessions: u32) -> Self {
         self.max_concurrent_transactions = max_sessions;
         self
+    }
+
+    /// Build a `QldbDriver` using the AWS SDK for Rust.
+    ///
+    /// The SDK will automatically configure itself from your environment. See
+    /// [`sdk_config`] and [`config`] for finer grain control.
+    pub async fn build(self) -> Result<QldbDriver, BuilderError> {
+        let aws_config = aws_config::load_from_env().await;
+        self.sdk_config(&aws_config).await
     }
 
     /// Build a `QldbDriver` using the AWS SDK for Rust.
@@ -102,6 +126,17 @@ impl QldbDriverBuilder {
     }
 }
 
+/// ## Creating a driver
+///
+/// See [`QldbDriverBuilder`].
+///
+/// ## Statements (queries and results)
+///
+/// Reads and writes to QLDB are achieved through PartiQL statements. PartiQL
+/// extends SQL with support for open and nested content. You can learn more
+/// about it in the [documentation].
+/// [documentation]: https://docs.aws.amazon.com/qldb/latest/developerguide/ql-reference.html
+///
 /// ## Concurrency
 ///
 /// End users of the driver should call `clone` and drive concurrency off the
