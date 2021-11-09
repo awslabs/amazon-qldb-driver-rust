@@ -3,6 +3,7 @@ pub mod error;
 pub mod execution_stats;
 pub mod ion_compat;
 pub mod pool;
+pub mod results;
 pub mod retry;
 pub mod transaction;
 
