@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
-use amazon_qldb_driver_core::TransactionAttempt;
-use amazon_qldb_driver_core::{QldbDriverBuilder, TransactionResult};
+use amazon_qldb_driver::TransactionAttempt;
+use amazon_qldb_driver::{QldbDriverBuilder, TransactionResult};
 use anyhow::Result;
 use ion_c_sys::reader::IonCReader;
 use tokio;

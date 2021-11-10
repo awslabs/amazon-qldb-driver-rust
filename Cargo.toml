@@ -2,6 +2,5 @@
 
 members = [
     "aws-sdk-qldbsessionv2",
-    "amazon-qldb-driver-core",
     "amazon-qldb-driver",
 ]

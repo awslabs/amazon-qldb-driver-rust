@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use amazon_qldb_driver_core::{QldbDriver, QldbDriverBuilder, TransactionAttempt};
+use amazon_qldb_driver::{QldbDriver, QldbDriverBuilder, TransactionAttempt};
 use anyhow::Result;
 use tokio::{self, spawn};
 

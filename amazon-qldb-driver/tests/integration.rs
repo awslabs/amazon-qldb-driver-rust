@@ -1,4 +1,4 @@
-use amazon_qldb_driver_core::{QldbDriver, QldbDriverBuilder, TransactionAttempt};
+use amazon_qldb_driver::{QldbDriver, QldbDriverBuilder, TransactionAttempt};
 use aws_hyper::DynConnector;
 use aws_sdk_qldbsessionv2::{Client, Config, Credentials, Region};
 use aws_smithy_client::dvr::{Event, ReplayingConnection};

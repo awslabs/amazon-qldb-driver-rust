@@ -7,14 +7,41 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-amazon-qldb-driver-core = { version = "*", path = "../amazon-qldb-driver-core" }
-tokio = "1.13.0"
+thiserror = "1.0.30"
+tokio = { version = "1.13.0", features = ["full"] }
+futures = "0.3"
+futures-core = "0.3"
+async-stream = "0.3"
+bytes = "1.1.0"
+async-trait = "0.1.51"
+# FIXME: The default features include "client" which generates an actual client.
+# We don't want that! Instead, we just want the *shapes*. This allows the -core
+# package to be agnostic of the actual client used.
+aws_sdk_qldbsessionv2 = { path = "../aws-sdk-qldbsessionv2", package = "aws-sdk-qldbsessionv2", features = ["rustls", "client"] }
+aws-config = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.22-alpha", package = "aws-config", features = [] }
+aws-hyper = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.22-alpha", package = "aws-hyper", features = [] }
+aws-smithy-http = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.22-alpha", package = "aws-smithy-http", features = [] }
+aws-types = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.22-alpha", package = "aws-types", features = [] }
+
+sha2 = "0.9.8"
+ion-rs = "0.6.0"
+ion-c-sys = "0.4.11"
+rand = "0.8.4"
+bb8 = "0.7.1"
+tracing = "0.1.29"
+http = "0.2.5"
 
 [dev-dependencies]
-aws-config = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.22-alpha", package = "aws-config", features = [] }
 thiserror = "1.0.30"
 anyhow = "1.0.44"
+aws-config = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.22-alpha", package = "aws-config", features = [] }
+aws-smithy-client = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.22-alpha", package = "aws-smithy-client", features = ["test-util"] }
+aws-smithy-eventstream  = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.22-alpha", package = "aws-smithy-eventstream", features = [] }
+serde_json = "1"
+hex-literal = "0.3.3"
+ansi_term = "0.12.1"
 tracing = "0.1.29"
 tracing-subscriber = { version = "0.3.1", features = ["fmt"] }
+tokio-test = "0.4.2"
 ion-rs = "0.6.0"
 ion-c-sys = "0.4.11"

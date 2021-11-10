@@ -15,21 +15,6 @@ dependencies = [
 name = "amazon-qldb-driver"
 version = "0.1.0"
 dependencies = [
- "amazon-qldb-driver-core",
- "anyhow",
- "aws-config",
- "ion-c-sys",
- "ion-rs",
- "thiserror",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "amazon-qldb-driver-core"
-version = "0.1.0"
-dependencies = [
  "ansi_term 0.12.1",
  "anyhow",
  "async-stream",

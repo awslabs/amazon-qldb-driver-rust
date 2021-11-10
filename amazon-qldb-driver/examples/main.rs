@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
-use amazon_qldb_driver_core::ion_compat;
-use amazon_qldb_driver_core::{QldbDriverBuilder, TransactionAttempt};
+use amazon_qldb_driver::ion_compat;
+use amazon_qldb_driver::{QldbDriverBuilder, TransactionAttempt};
 use tokio;
 use tracing::info;
 
