@@ -183,7 +183,10 @@ where
             values.push(it?)
         }
 
-        Ok(BufferedStatementResults { values })
+        Ok(BufferedStatementResults {
+            values,
+            execution_stats: self.execution_stats,
+        })
     }
 }
 
@@ -247,11 +250,16 @@ where
 
 pub struct BufferedStatementResults {
     values: Vec<Bytes>,
+    execution_stats: ExecutionStats,
 }
 
 impl BufferedStatementResults {
     pub fn len(&self) -> usize {
         self.values.len()
+    }
+
+    pub fn execution_stats(&self) -> &ExecutionStats {
+        &self.execution_stats
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &[u8]> {

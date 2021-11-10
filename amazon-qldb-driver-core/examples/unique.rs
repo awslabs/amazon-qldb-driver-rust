@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use amazon_qldb_driver::{QldbDriver, QldbDriverBuilder, TransactionAttempt};
+use amazon_qldb_driver_core::{QldbDriver, QldbDriverBuilder, TransactionAttempt};
 use anyhow::Result;
 use tokio::{self, spawn};
 
@@ -168,9 +168,12 @@ async fn example_transaction(driver: QldbDriver, task_id: u32) -> Result<(bool, 
         .transact(|mut tx: TransactionAttempt<Infallible>| async {
             let check = tx
                 .execute_statement("select * from example where id = 1")
+                .await?
+                .buffered()
                 .await?;
             if check.len() == 0 {
-                tx.execute_statement("insert into example `{id: 1}`")
+                let _ = tx
+                    .execute_statement("insert into example `{id: 1}`")
                     .await?;
                 tx.commit(true).await
             } else {

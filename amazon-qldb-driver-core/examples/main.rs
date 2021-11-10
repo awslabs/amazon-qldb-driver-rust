@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
-use amazon_qldb_driver::ion_compat;
-use amazon_qldb_driver::{QldbDriverBuilder, TransactionAttempt};
+use amazon_qldb_driver_core::ion_compat;
+use amazon_qldb_driver_core::{QldbDriverBuilder, TransactionAttempt};
 use tokio;
 use tracing::info;
 
@@ -24,6 +24,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .transact(|mut tx: TransactionAttempt<Infallible>| async {
             let results = tx
                 .execute_statement("select value 42 from information_schema.user_tables")
+                .await?
+                .buffered()
                 .await?;
 
             tx.commit(results).await
