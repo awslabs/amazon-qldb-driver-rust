@@ -183,6 +183,17 @@ impl QldbDriverBuilder {
 /// # }
 /// ```
 ///
+/// ## Results
+///
+/// Results are streamed in (see [`futures::stream::Stream`]) by default. If you
+/// expect your result sets to be small, you can use
+/// [`crate::results::StatementResults::buffered`] to get everything in a Vec.
+///
+/// The driver exposes [`bytes::Bytes`] by default. Higher level abstractions
+/// can be built on this, such as
+/// [`crate::results::BufferedStatementResults::readers`] which returns
+/// [`ion_c_sys::reader::IonCReaderHandle`] wrappers over those bytes.
+///
 /// ## Concurrency
 ///
 /// End users of the driver should call `clone` and drive concurrency off the
