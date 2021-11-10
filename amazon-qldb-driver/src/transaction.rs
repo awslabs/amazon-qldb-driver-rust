@@ -53,7 +53,7 @@ pub struct TransactionAttempt<E> {
 
 impl<E> TransactionAttempt<E>
 where
-    E: std::error::Error + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     /// Delegates to the underlying connection with a call to `map_err`.
     pub(crate) async fn send_streaming_command(
@@ -189,7 +189,7 @@ pub struct StatementBuilder<'tx, E> {
 
 impl<'tx, E> StatementBuilder<'tx, E>
 where
-    E: std::error::Error + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     fn new(attempt: &'tx mut TransactionAttempt<E>, partiql: String) -> StatementBuilder<'tx, E> {
         StatementBuilder {

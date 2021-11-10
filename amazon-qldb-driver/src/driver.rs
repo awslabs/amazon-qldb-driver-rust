@@ -251,7 +251,7 @@ impl QldbDriver {
     where
         Fut: Future<Output = Result<TransactionDisposition<R>, TransactError<E>>>,
         F: Fn(TransactionAttempt<E>) -> Fut,
-        E: std::error::Error + 'static,
+        E: std::error::Error + Send + Sync + 'static,
     {
         let mut attempt_number = 0u32;
 

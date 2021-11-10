@@ -73,7 +73,7 @@ impl From<aws_sdk_qldbsessionv2::model::TransactionError> for GenericError {
 #[non_exhaustive]
 pub enum TransactError<E>
 where
-    E: std::error::Error + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     /// Any error thrown by user code. The driver does not retry these.
     // This is the only variant that uses the From infrastructure to keep
@@ -127,7 +127,7 @@ pub enum CommunicationError {
 
 pub(crate) fn transport_err<E>(err: SendStreamingCommandError) -> TransactError<E>
 where
-    E: std::error::Error + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     TransactError::CommunicationError {
         source: Box::new(CommunicationError::Transport(err)),
@@ -136,7 +136,7 @@ where
 
 pub(crate) fn unexpected_response<E, S>(expected: S, actual: ResultStream) -> TransactError<E>
 where
-    E: std::error::Error + 'static,
+    E: std::error::Error + Send + Sync + 'static,
     S: Into<String>,
 {
     TransactError::CommunicationError {
@@ -149,7 +149,7 @@ where
 
 pub(crate) fn malformed_response<E, S>(message: S) -> TransactError<E>
 where
-    E: std::error::Error + 'static,
+    E: std::error::Error + Send + Sync + 'static,
     S: Into<String>,
 {
     TransactError::CommunicationError {

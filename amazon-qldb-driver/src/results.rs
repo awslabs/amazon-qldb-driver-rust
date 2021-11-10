@@ -67,7 +67,7 @@ pub(crate) async fn execute_statement_paginated<E>(
     statement: Statement,
 ) -> Result<StatementResults<'_, E>, TransactError<E>>
 where
-    E: std::error::Error + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     let mut execution_stats = ExecutionStats::default();
     let resp = transaction
@@ -153,18 +153,18 @@ enum YieldNext {
 /// fetched.
 pub struct StatementResults<'tx, E>
 where
-    E: std::error::Error + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
-    stream: Pin<Box<dyn Stream<Item = Result<YieldNext, TransactError<E>>> + 'tx>>,
+    stream: Pin<Box<dyn Stream<Item = Result<YieldNext, TransactError<E>>> + Send + 'tx>>,
     execution_stats: ExecutionStats,
 }
 
 impl<'tx, E> StatementResults<'tx, E>
 where
-    E: std::error::Error + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     fn new(
-        stream: impl Stream<Item = Result<YieldNext, TransactError<E>>> + 'tx,
+        stream: impl Stream<Item = Result<YieldNext, TransactError<E>>> + Send + 'tx,
         execution_stats: ExecutionStats,
     ) -> StatementResults<'tx, E> {
         StatementResults {
@@ -203,7 +203,7 @@ where
 // ergonomic, such as deserializing all values into structs.
 impl<'tx, E> Stream for StatementResults<'tx, E>
 where
-    E: std::error::Error + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     type Item = Result<Bytes, TransactError<E>>;
 
