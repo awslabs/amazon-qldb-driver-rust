@@ -82,7 +82,7 @@ impl SendCommandInput {
             _input: &crate::input::SendCommandInput,
             output: &mut String,
         ) -> Result<(), aws_smithy_http::operation::BuildError> {
-            write!(output, "/SendCommand").expect("formatting should succeed");
+            write!(output, "/send-command").expect("formatting should succeed");
             Ok(())
         }
         fn add_headers(

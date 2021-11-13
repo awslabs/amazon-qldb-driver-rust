@@ -3,6 +3,7 @@ use aws_hyper::DynConnector;
 use aws_sdk_qldbsessionv2::{Client, Config, Credentials, Region};
 use aws_smithy_client::dvr::{Event, ReplayingConnection};
 use aws_smithy_eventstream::frame::{DecodedFrame, HeaderValue, Message, MessageFrameDecoder};
+
 use ion_c_sys::reader::IonCReader;
 use ion_c_sys::result::IonCError;
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,10 +14,28 @@ use std::error::Error as StdError;
 async fn test_success() -> Result<(), Box<dyn std::error::Error>> {
     let (replayer, driver) = replaying_driver("us-west-2", include_str!("success.json")).await?;
 
+    // use aws_smithy_client::dvr::RecordingConnection;
+    // use http::Uri;
+    // use aws_sdk_qldbsessionv2::{config, Endpoint};
+    // let sdk_config = aws_config::from_env().region("us-east-1").load().await;
+    // let qldb_config = config::Builder::from(&sdk_config)
+    //     .endpoint_resolver(Endpoint::immutable(Uri::from_static(
+    //         "https://session-547110709870.dev.qldb.aws.a2z.com/",
+    //     )))
+    //     .build();
+    // let conn = aws_smithy_client::conns::https();
+    // let adapter = DynConnector::new(aws_smithy_client::hyper_ext::Adapter::builder().build(conn));
+    // let recording = RecordingConnection::new(adapter);
+    // let client = Client::from_conf_conn(qldb_config, DynConnector::new(recording.clone()));
+    // let driver = QldbDriverBuilder::new()
+    //     .ledger_name("sample-ledger-use1-547110709870")
+    //     .build_with_client(client)
+    //     .await?;
+
     let table_names = driver
         .transact(|mut tx: TransactionAttempt<Infallible>| async {
             let table_names = tx
-                .execute_statement("select name from information_schema.user_tables")
+                .execute_statement("select value name from information_schema.user_tables")
                 .await?
                 .buffered()
                 .await?;
@@ -24,6 +43,11 @@ async fn test_success() -> Result<(), Box<dyn std::error::Error>> {
             tx.commit(table_names).await
         })
         .await?;
+
+    // serde_json::to_writer_pretty(
+    //     std::fs::File::create("success.json")?,
+    //     &recording.events()[..],
+    // )?;
 
     // Validate the requests
     replayer
@@ -35,13 +59,23 @@ async fn test_success() -> Result<(), Box<dyn std::error::Error>> {
     let table_names = table_names
         .readers()
         .into_iter()
-        .map(|reader| Ok(reader?.read_string()?.to_string()))
+        .map(|reader| {
+            let mut reader = reader?;
+            assert_eq!(ion_c_sys::ION_TYPE_STRING, reader.next()?);
+            Ok(reader.read_string()?.to_string())
+        })
         .collect::<Result<Vec<String>, IonCError>>()?;
     assert_eq!(&["my_table"], &table_names[..]);
 
     Ok(())
 }
 
+// FIXME [1]: These changes are a little non-sensical because we're not
+// connecting anywhere. However, for record-replay, the actual events did *go
+// somewhere* at some point. Editing the recording is a little painful due to
+// checksums etc.
+//
+// Once this feature is released, go rerun the recording.
 async fn replaying_driver(
     region: &'static str,
     events_json: &str,
@@ -54,13 +88,18 @@ async fn replaying_driver(
     let config = Config::builder()
         .region(region)
         .credentials_provider(credentials)
+        .endpoint_resolver(aws_sdk_qldbsessionv2::Endpoint::immutable(
+            // FIXME [1]
+            http::Uri::from_static("https://session-547110709870.dev.qldb.aws.a2z.com/"),
+        ))
         .build();
     let client = Client::from_conf_conn(config, DynConnector::new(replayer.clone()));
 
     Ok((
         replayer,
         QldbDriverBuilder::default()
-            .ledger_name("test-ledger-name")
+            // .ledger_name("test-ledger-name") // FIXME [1]
+            .ledger_name("sample-ledger-use1-547110709870")
             .build_with_client(client)
             .await?,
     ))

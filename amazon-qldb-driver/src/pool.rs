@@ -13,7 +13,7 @@ use futures::{
     SinkExt,
 };
 use thiserror::Error;
-use tracing::debug;
+use tracing::{debug, trace};
 
 // FIXME: Consider making this a non-exhaustive enum.
 pub type ConnectionError = SdkError<SendCommandError>;
@@ -59,6 +59,12 @@ where
     }
 }
 
+impl<C> Drop for QldbSessionV2Manager<C> {
+    fn drop(&mut self) {
+        debug!("connection pool shutting down");
+    }
+}
+
 /// A HTTP/2 based connection to QLDB. There is one physical connection per
 /// session, and each session can have at most one open transaction.
 ///
@@ -84,6 +90,7 @@ where
         // inflight at any given time.
         let (sender, receiver) = channel(1);
 
+        trace!("establishing new connection");
         let output = self
             .client
             .send_command()
@@ -91,6 +98,7 @@ where
             .command_stream(receiver.into())
             .send()
             .await?;
+        trace!("connection established");
 
         // TODO: Is there an initial-response?
         // let initial = output.result_stream.try_recv_initial().await?;
