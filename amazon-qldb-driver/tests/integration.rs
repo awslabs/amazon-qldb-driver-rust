@@ -12,6 +12,9 @@ use std::error::Error as StdError;
 
 #[tokio::test]
 async fn test_success() -> Result<(), Box<dyn std::error::Error>> {
+    // Run me with `export RUST_LOG=debug` for more output!
+    tracing_subscriber::fmt::init();
+
     let (replayer, driver) = replaying_driver("us-west-2", include_str!("success.json")).await?;
 
     // use aws_smithy_client::dvr::RecordingConnection;
@@ -142,6 +145,37 @@ fn validate_body(
     let expected_frames = decode_frames(expected_body);
     let actual_frames = decode_frames(actual_body);
 
+    for (i, ((expected_wrapper, expected_message), (actual_wrapper, actual_message))) in
+        expected_frames.iter().zip(actual_frames.iter()).enumerate()
+    {
+        assert_eq!(
+            header_names(&expected_wrapper),
+            header_names(&actual_wrapper)
+        );
+
+        match (expected_message, actual_message) {
+            (Some(expected_message), Some(actual_message)) => {
+                assert_eq!(
+                    header_map(&expected_message),
+                    header_map(&actual_message),
+                    "header mismatch on frame {}",
+                    i
+                );
+                assert_eq!(
+                    expected_message.payload(),
+                    actual_message.payload(),
+                    "payload mismatch on frame {}",
+                    i
+                );
+            }
+            (None, None) => {}
+            _ => assert_eq!(
+                expected_message, actual_message,
+                "expected message does not match actual message"
+            ),
+        }
+    }
+
     if full_stream {
         assert_eq!(
             expected_frames.len(),
@@ -154,19 +188,6 @@ fn validate_body(
         );
     }
 
-    for ((expected_wrapper, expected_message), (actual_wrapper, actual_message)) in
-        expected_frames.into_iter().zip(actual_frames.into_iter())
-    {
-        assert_eq!(
-            header_names(&expected_wrapper),
-            header_names(&actual_wrapper)
-        );
-        if let Some(expected_message) = expected_message {
-            let actual_message = actual_message.unwrap();
-            assert_eq!(header_map(&expected_message), header_map(&actual_message));
-            assert_eq!(expected_message.payload(), actual_message.payload());
-        }
-    }
     Ok(())
 }
 
