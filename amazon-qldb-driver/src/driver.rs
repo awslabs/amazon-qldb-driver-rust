@@ -1,5 +1,7 @@
 use aws_sdk_qldbsessionv2::{Client, Config};
 use bb8::Pool;
+use std::convert::Infallible;
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::{future::Future, time::Duration};
 use tokio::sync::Mutex;
@@ -18,7 +20,7 @@ use crate::{
 /// The simplest usage requires just a ledger name:
 ///
 /// ```no_run
-/// use amazon_qldb_driver_core::QldbDriverBuilder;
+/// use amazon_qldb_driver::QldbDriverBuilder;
 ///
 /// # let _driver: Result<_, Box<dyn std::error::Error>> = tokio_test::block_on(async {
 /// let driver = QldbDriverBuilder::default()
@@ -122,6 +124,7 @@ impl QldbDriverBuilder {
             ledger_name: Arc::new(ledger_name.clone()),
             session_pool: Arc::new(session_pool),
             transaction_retry_policy,
+            _err: PhantomData,
         })
     }
 }
@@ -150,8 +153,8 @@ impl QldbDriverBuilder {
 /// ```no_run
 /// # use std::convert::Infallible;
 /// #
-/// # use amazon_qldb_driver_core::ion_compat;
-/// # use amazon_qldb_driver_core::{QldbDriverBuilder, TransactionAttempt};
+/// # use amazon_qldb_driver::ion_compat;
+/// # use amazon_qldb_driver::{QldbDriverBuilder, TransactionAttempt};
 /// # use tokio;
 /// # use tracing::info;
 /// #
@@ -232,19 +235,42 @@ impl QldbDriverBuilder {
 /// such as circuit breakers. Both of these answers suck, so instead of picking
 /// we wrap all policies in a Mutex. Performance of a Mutex is unlikely to be
 /// the limiting factor in a QLDB application.
-#[derive(Clone)]
-pub struct QldbDriver {
+pub struct QldbDriver<E = Infallible> {
     pub ledger_name: Arc<String>,
     session_pool: Arc<Pool<QldbSessionV2Manager>>,
     transaction_retry_policy: Arc<Mutex<Box<dyn TransactionRetryPolicy + Send + Sync>>>,
+    _err: PhantomData<E>,
 }
 
-impl QldbDriver {
+impl<E> Clone for QldbDriver<E> {
+    fn clone(&self) -> Self {
+        Self {
+            ledger_name: self.ledger_name.clone(),
+            session_pool: self.session_pool.clone(),
+            transaction_retry_policy: self.transaction_retry_policy.clone(),
+            _err: PhantomData,
+        }
+    }
+}
+
+impl<E> QldbDriver<E>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
     pub fn ledger_name(&self) -> String {
         (*self.ledger_name).clone()
     }
 
-    /// Execute a transaction against QLDB, retrying as necessary.
+    pub fn with_user_error<UE>(&self) -> QldbDriver<UE> {
+        QldbDriver {
+            ledger_name: self.ledger_name.clone(),
+            session_pool: self.session_pool.clone(),
+            transaction_retry_policy: self.transaction_retry_policy.clone(),
+            _err: PhantomData,
+        }
+    }
+
+    /// execute a transaction against QLDB, retrying as necessary.
     ///
     /// This function is the primary way you should interact with QLDB. The
     /// driver will acquire a connection and open a [`Transaction`], handing it
@@ -258,11 +284,10 @@ impl QldbDriver {
     /// closure! You should consider code running inside the closure as seeing
     /// speculative results that are only confirmed once the transaction
     /// commits.
-    pub async fn transact<F, Fut, R, E>(&self, transaction: F) -> Result<R, TransactError<E>>
+    pub async fn transact<F, Fut, R>(&self, transaction: F) -> Result<R, TransactError<E>>
     where
         Fut: Future<Output = Result<TransactionDisposition<R>, TransactError<E>>>,
         F: Fn(TransactionAttempt<E>) -> Fut,
-        E: std::error::Error + Send + Sync + 'static,
     {
         let mut attempt_number = 0u32;
 

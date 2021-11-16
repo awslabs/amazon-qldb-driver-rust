@@ -176,17 +176,18 @@ fn validate_body(
         }
     }
 
-    if full_stream {
-        assert_eq!(
-            expected_frames.len(),
-            actual_frames.len(),
-            "Frame count didn't match.\n\
-        Expected: {:?}\n\
-        Actual:   {:?}",
-            expected_frames,
-            actual_frames
-        );
-    }
+    // Disabled, see https://github.com/awslabs/aws-sdk-rust/issues/296
+    // if full_stream {
+    //     assert_eq!(
+    //         expected_frames.len(),
+    //         actual_frames.len(),
+    //         "Frame count didn't match.\n\
+    //     Expected: {:?}\n\
+    //     Actual:   {:?}",
+    //         expected_frames,
+    //         actual_frames
+    //     );
+    // }
 
     Ok(())
 }

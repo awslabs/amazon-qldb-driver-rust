@@ -1,6 +1,4 @@
-use std::convert::Infallible;
-
-use amazon_qldb_driver::{QldbDriver, QldbDriverBuilder, TransactionAttempt};
+use amazon_qldb_driver::{QldbDriver, QldbDriverBuilder};
 use anyhow::Result;
 use tokio::{self, spawn};
 
@@ -165,7 +163,7 @@ async fn main() -> Result<()> {
 /// in the system **and then call commit**.
 async fn example_transaction(driver: QldbDriver, task_id: u32) -> Result<(bool, u32)> {
     let winner = driver
-        .transact(|mut tx: TransactionAttempt<Infallible>| async {
+        .transact(|mut tx| async {
             let check = tx
                 .execute_statement("select * from example where id = 1")
                 .await?

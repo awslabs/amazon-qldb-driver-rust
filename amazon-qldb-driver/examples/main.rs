@@ -1,7 +1,5 @@
-use std::convert::Infallible;
-
 use amazon_qldb_driver::ion_compat;
-use amazon_qldb_driver::{QldbDriverBuilder, TransactionAttempt};
+use amazon_qldb_driver::QldbDriverBuilder;
 use tokio;
 use tracing::info;
 
@@ -21,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Usage example 1: Here we use a closure that returns a `Result<R, QldbError>`. The closure is wrapped in ceremony to appease the type system.
     info!("Transaction example 1 now running");
     let results = driver
-        .transact(|mut tx: TransactionAttempt<Infallible>| async {
+        .transact(|mut tx| async {
             let results = tx
                 .execute_statement("select value 42 from information_schema.user_tables")
                 .await?
