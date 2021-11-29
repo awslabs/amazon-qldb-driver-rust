@@ -100,10 +100,10 @@ impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
                     // There is no point retrying, since the sdk will simply
                     // reject again!
                     SdkError::ConstructionFailure(_) => false,
-                    // We retry dispatch failures even though the request *may*
+                    // We retry dispatch and timeout failures even though the request *may*
                     // have been sent. In QLDB, the commit digest protects
                     // against a duplicate statement being sent.
-                    SdkError::DispatchFailure(_) => true,
+                    SdkError::DispatchFailure(_) | SdkError::TimeoutError(_) => true,
                     SdkError::ResponseError { raw, .. } => match raw.http().status().as_u16() {
                         500 | 503 => true,
                         _ => false,
