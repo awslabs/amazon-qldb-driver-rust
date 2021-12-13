@@ -17,4 +17,4 @@ anyhow = "1.0.50"
 tracing = "0.1.29"
 tracing-subscriber = { version = "0.3.2", features = ["fmt"] }
 ion-rs = "0.7.0"
-ion-c-sys = "0.4.11"
+ion-c-sys = "0.4.12"

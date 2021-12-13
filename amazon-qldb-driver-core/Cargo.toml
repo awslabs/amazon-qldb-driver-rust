@@ -22,7 +22,7 @@ aws-types = { git = "https://github.com/awslabs/aws-sdk-rust", tag = "v0.0.26-al
 
 sha2 = "0.9.8"
 ion-rs = "0.7.0"
-ion-c-sys = "0.4.11"
+ion-c-sys = "0.4.12"
 rand = "0.8.4"
 futures = "0.3.18"
 bb8 = "0.7.1"
