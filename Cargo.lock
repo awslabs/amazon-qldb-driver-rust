@@ -33,7 +33,7 @@ dependencies = [
  "ansi_term 0.12.1",
  "anyhow",
  "async-trait",
- "aws-hyper",
+ "aws-hyper 0.3.0",
  "aws-sdk-qldbsession",
  "aws-smithy-http",
  "aws-types",
@@ -122,7 +122,7 @@ version = "0.0.26-alpha"
 source = "git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.26-alpha#f1d144d5a0aa385256989a6171f0cd514a55ef7d"
 dependencies = [
  "aws-http",
- "aws-hyper",
+ "aws-hyper 0.0.26-alpha",
  "aws-sdk-sts",
  "aws-smithy-async",
  "aws-smithy-client",
@@ -188,13 +188,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-hyper"
+version = "0.3.0"
+source = "git+https://github.com/awslabs/aws-sdk-rust?tag=v0.3.0#fe1cfc31a925306b740e22a005fbf0ab6ec4fca7"
+
+[[package]]
 name = "aws-sdk-qldbsession"
 version = "0.0.26-alpha"
 source = "git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.26-alpha#f1d144d5a0aa385256989a6171f0cd514a55ef7d"
 dependencies = [
  "aws-endpoint",
  "aws-http",
- "aws-hyper",
+ "aws-hyper 0.0.26-alpha",
  "aws-sig-auth",
  "aws-smithy-async",
  "aws-smithy-client",
@@ -213,7 +218,7 @@ source = "git+https://github.com/awslabs/aws-sdk-rust?tag=v0.0.26-alpha#f1d144d5
 dependencies = [
  "aws-endpoint",
  "aws-http",
- "aws-hyper",
+ "aws-hyper 0.0.26-alpha",
  "aws-sig-auth",
  "aws-smithy-async",
  "aws-smithy-client",
