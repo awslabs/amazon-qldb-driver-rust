@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use aws_hyper::{Client, DynConnector, SmithyConnector};
 use aws_sdk_qldbsession::{
     error::SendCommandError, input::SendCommandInput, model::*, output::SendCommandOutput, Blob,
     Config, SdkError,
 };
+use aws_smithy_client::bounds::SmithyConnector;
+use aws_smithy_client::erase::DynConnector;
+use aws_smithy_client::Client;
 use bytes::Bytes;
 use tracing::debug;
 
