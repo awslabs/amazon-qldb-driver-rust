@@ -1,5 +1,4 @@
 use anyhow::Result;
-use aws_hyper::Client;
 use aws_sdk_qldbsession::Config;
 use bb8::Pool;
 use std::sync::Arc;
@@ -61,9 +60,14 @@ impl QldbDriverBuilder {
     ///
     /// `sdk_config` will be used to create a configured instance of the SDK.
     pub async fn sdk_config(self, sdk_config: Config) -> QldbResult<QldbDriver<QldbSessionSdk>> {
-        let hyper = Client::https();
-        let client = QldbSessionSdk::new(hyper, sdk_config);
-        self.build_with_client(client).await
+        let builder: aws_smithy_client::Builder<
+            _,
+            aws_sdk_qldbsession::middleware::DefaultMiddleware,
+            _,
+        > = aws_smithy_client::Builder::new();
+        let client = builder.rustls().build_dyn();
+        let sdk = QldbSessionSdk::new(client, sdk_config);
+        self.build_with_client(sdk).await
     }
 
     pub async fn build_with_client<C>(self, client: C) -> QldbResult<QldbDriver<C>>
