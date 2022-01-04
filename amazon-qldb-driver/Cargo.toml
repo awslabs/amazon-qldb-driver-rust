@@ -15,6 +15,6 @@ aws-config = { version = "0.3.0", features = [] }
 thiserror = "1.0.30"
 anyhow = "1.0.52"
 tracing = "0.1.29"
-tracing-subscriber = { version = "0.3.3", features = ["fmt"] }
+tracing-subscriber = { version = "0.3.5", features = ["fmt"] }
 ion-rs = "0.7.0"
 ion-c-sys = "0.4.12"
