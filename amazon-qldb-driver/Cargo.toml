@@ -11,7 +11,7 @@ amazon-qldb-driver-core = { version = "*", path = "../amazon-qldb-driver-core" }
 tokio = "1.15.0"
 
 [dev-dependencies]
-aws-config = { version = "0.3.0", features = [] }
+aws-config = { version = "0.4.1", features = [] }
 thiserror = "1.0.30"
 anyhow = "1.0.52"
 tracing = "0.1.29"
