@@ -21,7 +21,7 @@ aws-smithy-http = { version = "0.33.1", features = ["rt-tokio"] }
 aws-types = "0.6.0"
 
 sha2 = "0.10.0"
-ion-rs = "0.7.0"
+ion-rs = "0.8.0"
 ion-c-sys = "0.4.12"
 rand = "0.8.4"
 futures = "0.3.19"
