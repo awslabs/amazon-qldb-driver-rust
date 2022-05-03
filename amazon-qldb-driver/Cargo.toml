@@ -16,5 +16,5 @@ thiserror = "1.0.30"
 anyhow = "1.0.57"
 tracing = "0.1.29"
 tracing-subscriber = { version = "0.3.7", features = ["fmt"] }
-ion-rs = "0.7.0"
+ion-rs = "0.9.0"
 ion-c-sys = "0.4.14"
