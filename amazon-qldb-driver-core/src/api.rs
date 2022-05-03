@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use aws_sdk_qldbsession::{
-    error::SendCommandError, input::SendCommandInput, model::*, output::SendCommandOutput, Blob,
-    Config, SdkError,
+    error::SendCommandError, input::SendCommandInput, model::*, output::SendCommandOutput,
+    types::Blob, types::SdkError, Config,
 };
 use aws_smithy_client::bounds::SmithyConnector;
 use aws_smithy_client::erase::DynConnector;

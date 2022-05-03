@@ -10,7 +10,7 @@ use aws_sdk_qldbsession::{
     error::{SendCommandError, SendCommandErrorKind},
     input::SendCommandInput,
     output::SendCommandOutput,
-    SdkError,
+    types::SdkError,
 };
 use bb8::{ErrorSink, ManageConnection};
 use tracing::debug;
@@ -106,10 +106,7 @@ where
         })
     }
 
-    async fn is_valid(
-        &self,
-        _conn: &mut bb8::PooledConnection<'_, Self>,
-    ) -> Result<(), Self::Error> {
+    async fn is_valid(&self, _conn: &mut Self::Connection) -> Result<(), Self::Error> {
         Ok(())
     }
 

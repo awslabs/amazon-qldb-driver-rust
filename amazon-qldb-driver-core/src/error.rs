@@ -1,4 +1,4 @@
-use aws_sdk_qldbsession::{error, SdkError};
+use aws_sdk_qldbsession::{error, types::SdkError};
 
 use aws_smithy_http::operation::BuildError;
 use core::fmt;
