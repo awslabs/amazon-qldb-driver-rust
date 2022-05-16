@@ -1,7 +1,7 @@
 use crate::error::QldbError;
 use aws_sdk_qldbsession::error::SendCommandError;
 use aws_sdk_qldbsession::error::SendCommandErrorKind;
-use aws_sdk_qldbsession::SdkError;
+use aws_sdk_qldbsession::types::SdkError;
 use rand::thread_rng;
 use rand::Rng;
 use std::{cmp::min, time::Duration};
