@@ -8,7 +8,7 @@ edition = "2018"
 
 [dependencies]
 amazon-qldb-driver-core = { version = "*", path = "../amazon-qldb-driver-core" }
-tokio = "1.16.1"
+tokio = "1.19.2"
 
 [dev-dependencies]
 aws-config = { version = "0.12.0", features = [] }
