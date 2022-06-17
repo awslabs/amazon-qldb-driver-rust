@@ -18,7 +18,7 @@ async-trait = "0.1.53"
 aws-sdk-qldbsession = { version = "0.12.0", features = ["rustls"] }
 aws-smithy-client = { version = "0.42.0", features = ["client-hyper", "rustls", "rt-tokio"] }
 aws-smithy-http = { version = "0.42.0", features = ["rt-tokio"] }
-aws-types = "0.12.0"
+aws-types = "0.13.0"
 
 sha2 = "0.10.2"
 ion-rs = "0.9.0"
