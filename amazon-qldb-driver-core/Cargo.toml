@@ -16,7 +16,7 @@ async-trait = "0.1.53"
 # We don't want that! Instead, we just want the *shapes*. This allows the -core
 # package to be agnostic of the actual client used.
 aws-sdk-qldbsession = { version = "0.13.0", features = ["rustls"] }
-aws-smithy-client = { version = "0.43.0", features = ["client-hyper", "rustls", "rt-tokio"] }
+aws-smithy-client = { version = "0.44.0", features = ["client-hyper", "rustls", "rt-tokio"] }
 aws-smithy-http = { version = "0.43.0", features = ["rt-tokio"] }
 aws-types = "0.13.0"
 
