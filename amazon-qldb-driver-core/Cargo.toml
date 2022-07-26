@@ -10,7 +10,7 @@ edition = "2018"
 thiserror = "1.0.31"
 anyhow = "1.0.58"
 tokio = { version = "1.20.0", features = ["full"] }
-bytes = "1.1.0"
+bytes = "1.2.0"
 async-trait = "0.1.53"
 # FIXME: The default features include "client" which generates an actual client.
 # We don't want that! Instead, we just want the *shapes*. This allows the -core
