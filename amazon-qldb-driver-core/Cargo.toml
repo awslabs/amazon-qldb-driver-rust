@@ -8,7 +8,7 @@ edition = "2018"
 
 [dependencies]
 thiserror = "1.0.31"
-anyhow = "1.0.58"
+anyhow = "1.0.60"
 tokio = { version = "1.20.0", features = ["full"] }
 bytes = "1.1.0"
 async-trait = "0.1.53"
