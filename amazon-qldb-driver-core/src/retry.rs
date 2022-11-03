@@ -125,7 +125,7 @@ impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
 
 fn exponential_backoff_with_jitter(base: u32, cap: u32, attempt_number: u32) -> u32 {
     let max = min(cap, base * 2_u32.pow(attempt_number));
-    thread_rng().gen_range(1..max)
+    thread_rng().gen_range(0..max)
 }
 
 #[cfg(test)]
@@ -140,7 +140,7 @@ mod tests {
             max_attempts,
         } = ExponentialBackoffJitterTransactionRetryPolicy::default();
 
-        let mut seq = vec![1..20, 1..40, 1..80, 1..160];
+        let mut seq = vec![0..20, 0..40, 0..80, 0..160];
         seq.reverse();
 
         for attempt_number in 1..=max_attempts {
