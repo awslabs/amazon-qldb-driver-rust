@@ -46,7 +46,7 @@ dependencies = [
  "async-trait",
  "aws-sdk-qldbsession",
  "aws-smithy-client 0.49.0",
- "aws-smithy-http 0.49.0",
+ "aws-smithy-http 0.51.0",
  "aws-types 0.51.0",
  "bb8",
  "bytes 1.2.1",
@@ -382,6 +382,8 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "pin-utils",
+ "tokio",
+ "tokio-util",
  "tracing",
 ]
 
