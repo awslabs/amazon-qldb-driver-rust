@@ -1,5 +1,4 @@
 use crate::error::QldbError;
-use aws_sdk_qldbsession::error::SendCommandError;
 use aws_sdk_qldbsession::error::SendCommandErrorKind;
 use aws_sdk_qldbsession::types::SdkError;
 use rand::thread_rng;
@@ -82,10 +81,7 @@ impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
         match error {
             QldbError::SdkError(e) => {
                 let should_retry = match &e {
-                    SdkError::ServiceError {
-                        err: SendCommandError { kind, .. },
-                        ..
-                    } => match kind {
+                    SdkError::ServiceError(service_error) => match service_error.err().kind {
                         SendCommandErrorKind::BadRequestException(_) => false,
                         SendCommandErrorKind::InvalidSessionException(_) => true,
                         SendCommandErrorKind::LimitExceededException(_) => false,
@@ -104,10 +100,13 @@ impl TransactionRetryPolicy for ExponentialBackoffJitterTransactionRetryPolicy {
                     // have been sent. In QLDB, the commit digest protects
                     // against a duplicate statement being sent.
                     SdkError::DispatchFailure(_) | SdkError::TimeoutError(_) => true,
-                    SdkError::ResponseError { raw, .. } => match raw.http().status().as_u16() {
+                    SdkError::ResponseError(res) => match res.raw().http().status().as_u16() {
                         500 | 503 => true,
                         _ => false,
                     },
+                    // SdkError enum is no longer exhaustive. Default to no retry for
+                    // unmodeled SDK errors.
+                    _ => false,
                 };
 
                 if !should_retry || attempt_number > self.max_attempts {

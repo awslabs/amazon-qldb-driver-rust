@@ -1,5 +1,6 @@
 use anyhow::Result;
 use aws_sdk_qldbsession::Config;
+use aws_smithy_client::http_connector::ConnectorSettings;
 use bb8::Pool;
 use std::sync::Arc;
 use std::{future::Future, time::Duration};
@@ -65,7 +66,9 @@ impl QldbDriverBuilder {
             aws_sdk_qldbsession::middleware::DefaultMiddleware,
             _,
         > = aws_smithy_client::Builder::new();
-        let client = builder.rustls().build_dyn();
+        let client = builder
+            .rustls_connector(ConnectorSettings::default())
+            .build_dyn();
         let sdk = QldbSessionSdk::new(client, sdk_config);
         self.build_with_client(sdk).await
     }
