@@ -54,7 +54,7 @@ where
         let op = input
             .make_operation(&self.inner.conf)
             .await
-            .map_err(|err| SdkError::ConstructionFailure(err.into()))?;
+            .map_err(|err| SdkError::construction_failure(err))?;
         self.inner.client.call(op).await
     }
 }

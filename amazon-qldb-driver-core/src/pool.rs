@@ -150,11 +150,8 @@ where
         let is_start_session = input.start_session.is_some();
         let res = client.send_command(input).await;
 
-        if let Err(SdkError::ServiceError {
-            err: SendCommandError { kind, .. },
-            ..
-        }) = &res
-        {
+        if let Err(SdkError::ServiceError(service_error)) = &res {
+            let kind = &service_error.err().kind;
             if let SendCommandErrorKind::InvalidSessionException(_) = kind {
                 self.notify_invalid();
             }

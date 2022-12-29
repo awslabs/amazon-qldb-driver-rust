@@ -1,6 +1,6 @@
 use aws_sdk_qldbsession::{error, types::SdkError};
 
-use aws_smithy_http::operation::BuildError;
+use aws_smithy_http::operation::error::BuildError;
 use core::fmt;
 use thiserror::Error;
 

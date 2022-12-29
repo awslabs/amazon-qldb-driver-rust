@@ -4,3 +4,7 @@ members = [
     "amazon-qldb-driver-core",
     "amazon-qldb-driver",
 ]
+
+[workspace.dependencies]
+anyhow = "1.0.68"
+thiserror = "1.0.38"
