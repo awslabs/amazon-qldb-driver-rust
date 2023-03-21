@@ -16,5 +16,5 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["fmt"] }
-ion-rs = "0.14.0"
+ion-rs = "0.16.0"
 ion-c-sys = "0.4.14"
