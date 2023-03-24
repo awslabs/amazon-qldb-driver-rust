@@ -15,16 +15,16 @@ async-trait = "0.1.67"
 # FIXME: The default features include "client" which generates an actual client.
 # We don't want that! Instead, we just want the *shapes*. This allows the -core
 # package to be agnostic of the actual client used.
-aws-sdk-qldbsession = { version = "0.22.0", features = ["rustls"] }
-aws-smithy-client = { version = "0.52.0", features = ["client-hyper", "rustls", "rt-tokio"] }
-aws-smithy-http = { version = "0.52.0", features = ["rt-tokio"] }
-aws-types = "0.52.0"
+aws-sdk-qldbsession = { version = "0.24.0", features = ["rustls"] }
+aws-smithy-client = { version = "0.54.4", features = ["client-hyper", "rustls", "rt-tokio"] }
+aws-smithy-http = { version = "0.54.4", features = ["rt-tokio"] }
+aws-types = "0.54.1"
 
 sha2 = "0.10.6"
-ion-rs = "0.14.0"
+ion-rs = { workspace = true }
 ion-c-sys = "0.4.14"
 rand = "0.8.5"
-futures = "0.3.24"
+futures = "0.3.27"
 bb8 = "0.8.0"
 tracing = "0.1.37"
 http = "0.2.7"
