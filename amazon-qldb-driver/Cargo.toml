@@ -17,4 +17,4 @@ anyhow = { workspace = true }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["fmt"] }
 ion-rs = { workspace = true }
-ion-c-sys = "0.4.14"
+ion-c-sys = "0.4.17"
