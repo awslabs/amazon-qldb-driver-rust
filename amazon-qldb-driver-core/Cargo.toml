@@ -22,7 +22,7 @@ aws-types = "0.54.1"
 
 sha2 = "0.10.6"
 ion-rs = { workspace = true }
-ion-c-sys = "0.4.14"
+ion-c-sys = "0.4.17"
 rand = "0.8.5"
 futures = "0.3.27"
 bb8 = "0.8.0"

@@ -1084,9 +1084,9 @@ dependencies = [
 
 [[package]]
 name = "ion-c-sys"
-version = "0.4.15"
+version = "0.4.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "558c3271fbb81431b1cd9a747d62e17da34c15178967800b4377fcf522d14447"
+checksum = "e3aac014d53151b9f9976fb5a84656da5ac047994f70c3f1df8f1d0b7e435866"
 dependencies = [
  "bigdecimal 0.2.2",
  "bindgen",
