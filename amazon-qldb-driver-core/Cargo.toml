@@ -17,7 +17,7 @@ async-trait = "0.1.67"
 # package to be agnostic of the actual client used.
 aws-sdk-qldbsession = { version = "0.24.0", features = ["rustls"] }
 aws-smithy-client = { version = "0.54.4", features = ["client-hyper", "rustls", "rt-tokio"] }
-aws-smithy-http = { version = "0.54.4", features = ["rt-tokio"] }
+aws-smithy-http = { version = "0.55.3", features = ["rt-tokio"] }
 aws-types = "0.54.1"
 
 sha2 = "0.10.6"
