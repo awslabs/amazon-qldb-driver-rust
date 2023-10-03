@@ -20,7 +20,7 @@ aws-smithy-client = { version = "0.54.4", features = ["client-hyper", "rustls", 
 aws-smithy-http = { version = "0.54.4", features = ["rt-tokio"] }
 aws-types = "0.54.1"
 
-sha2 = "0.10.6"
+sha2 = "0.10.8"
 ion-rs = { workspace = true }
 ion-c-sys = "0.4.14"
 rand = "0.8.5"
